@@ -24,5 +24,8 @@ if(NOT MSVC)
     set(CMAKE_CXX_STANDARD_LIBRARIES "-static-libgcc -static-libstdc++ -lwsock32 -lws2_32 ${CMAKE_CXX_STANDARD_LIBRARIES}")
 endif()
 
+# Библилтека вспомогательных инструментов (header-only)
+add_subdirectory("Sources/Common")
+
 # Примеры реализаций
 add_subdirectory("Sources/01_Basic")

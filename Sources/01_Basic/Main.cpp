@@ -2,9 +2,14 @@
 #include <string>
 #include <vector>
 #include <fstream>
+#include <sstream>
 
 #include <Windows.h>
 #include <glad/glad.h>
+#include <glm/gtc/type_ptr.hpp>
+
+#include <ShaderProgram.hpp>
+#include <GeometryBuffer.hpp>
 
 /// Дескриптор исполняемого модуля программы
 HINSTANCE g_hInstance = nullptr;
@@ -12,6 +17,8 @@ HINSTANCE g_hInstance = nullptr;
 HWND g_hwnd = nullptr;
 /// Дескриптор контекста отрисовки
 HDC g_hdc = nullptr;
+/// Контекст OpenGL
+HGLRC g_hglrc = nullptr;
 /// Наименование класса
 const char* g_strClassName = "MainWindowClass";
 /// Заголовок окна
@@ -29,6 +36,20 @@ const char* g_strWindowCaption = "01 - Basic example";
  */
 LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
+/**
+ * \brief Создание OpenGL контекста и его активация
+ * \param drawContext Контекст рисования окна Windows
+ * \return Дескриптор контекста OpenGL
+ */
+HGLRC OpenGlCreateContext(HDC drawContext);
+
+/**
+ * \brief Получение адреса функции OpenGL
+ * \param name Имя функции
+ * \return Указатель на функцию
+ */
+void *OpenGlGetFunction(const char *name);
+
 /** U T I L S **/
 
 /**
@@ -44,6 +65,33 @@ std::vector<unsigned char> LoadBytesFromFile(const std::string &path);
  * \return Строка
  */
 std::string LoadStringFromFile(const std::string &path);
+
+/** O P E N G L **/
+
+/// Геометрия квадрата для отрисовки на весь экран
+gl::GeometryBuffer* g_geometryQuad_;
+/// Основная шейдерная программа
+gl::ShaderProgram* g_shaderMain_;
+
+/**
+ * \brief Установка статуса вертикальной синхронизации
+ * \param status Состояние
+ */
+void SetVSyncStatus(bool status);
+
+/**
+ * \brief Инициализация OpenGL и компонентов рендеринга
+ * \param screenWidth Ширина экрана
+ * \param screenHeight Высота жкрана
+ */
+void InitOpenGl(unsigned screenWidth, unsigned screenHeight);
+
+/**
+ * \brief Рендеринг полноэкранного квадрата
+ * \param screenWidth Ширина экрана
+ * \param screenHeight Высота жкрана
+ */
+void RenderQuad(unsigned screenWidth, unsigned screenHeight);
 
 /** M A I N **/
 
@@ -112,6 +160,18 @@ int main(int argc, char* argv[])
         RECT clientRect;
         GetClientRect(g_hwnd, &clientRect);
 
+        /** OPEN GL **/
+
+        // Контекст OpenGL
+        g_hglrc = OpenGlCreateContext(g_hdc);
+        wglMakeCurrent(g_hdc,g_hglrc);
+
+        // Инициализация OpenGL
+        InitOpenGl(static_cast<unsigned>(clientRect.right),static_cast<unsigned>(clientRect.bottom));
+
+        // Вертикальная синхронизация
+        SetVSyncStatus(false);
+
         /** MAIN LOOP **/
 
         // Оконное сообщение
@@ -129,12 +189,21 @@ int main(int argc, char* argv[])
                     break;
                 }
             }
+
+            // Рендеринг
+            RenderQuad(static_cast<unsigned>(clientRect.right),static_cast<unsigned>(clientRect.bottom));
+            // Смена буферов окна
+            SwapBuffers(g_hdc);
         }
     }
     catch(std::exception& ex)
     {
         std::cout << ex.what() << std::endl;
     }
+
+    // Уничтожение контекста OpenGL
+    wglMakeCurrent(nullptr, nullptr);
+    wglDeleteContext(g_hglrc);
 
     // Уничтожение окна
     DestroyWindow(g_hwnd);
@@ -163,6 +232,80 @@ LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM 
     }
 
     return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
+/**
+ * \brief Создание OpenGL контекста и его активация
+ * \param drawContext Контекст рисования окна Windows
+ * \return Дескриптор контекста OpenGL
+ */
+HGLRC OpenGlCreateContext(HDC drawContext)
+{
+    // Описываем необходимый формат пикселей
+    PIXELFORMATDESCRIPTOR pfd = {};
+    pfd.nSize = sizeof(PIXELFORMATDESCRIPTOR);
+    pfd.nVersion = 1;
+    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+    pfd.iPixelType = PFD_TYPE_RGBA;
+    pfd.cColorBits = 32;
+    pfd.cDepthBits = 24;
+    pfd.cStencilBits = 8;
+    pfd.iLayerType = PFD_MAIN_PLANE;
+
+    // Номер формата пикселей
+    const int pixelFormatId = ChoosePixelFormat(drawContext, &pfd);
+
+    // Если не удалось найти подходящего формата пикселей
+    if (!pixelFormatId) {
+        throw std::runtime_error("Can't find suitable pixel format");
+    }
+
+    // Найти наиболее подходящее описание формата
+    PIXELFORMATDESCRIPTOR bestMatchPfd;
+    DescribePixelFormat(drawContext, pixelFormatId, sizeof(PIXELFORMATDESCRIPTOR), &bestMatchPfd);
+
+    // Если не удалось найти подходящего формата пикселей
+    if (bestMatchPfd.cDepthBits < pfd.cDepthBits) {
+        throw std::runtime_error("OpenGl context error : Can't find suitable pixel format for depth");
+    }
+
+    // Если не удалось установить формат пикселей
+    if (!SetPixelFormat(drawContext, pixelFormatId, &pfd)) {
+        throw std::runtime_error("OpenGl context error : Can't set selected pixel format");
+    }
+
+    // OpenGL контекст
+    HGLRC glContext = wglCreateContext(drawContext);
+    if (!glContext) {
+        throw std::runtime_error("OpenGl context error : Can't create OpenGL rendering context");
+    }
+
+    // Активировать OpenGL контекст
+    const BOOL success = wglMakeCurrent(drawContext, glContext);
+    if (!success) {
+        throw std::runtime_error("OpenGl context error : Can't setup rendering context");
+    }
+
+    return glContext;
+}
+
+/**
+ * \brief Получение адреса функции OpenGL
+ * \param name Имя функции
+ * \return Указатель на функцию
+ */
+void *OpenGlGetFunction(const char *name)
+{
+    void *p = (void *)wglGetProcAddress(name);
+    if(p == nullptr ||
+       (p == (void*)0x1) || (p == (void*)0x2) || (p == (void*)0x3) ||
+       (p == (void*)-1) )
+    {
+        HMODULE module = LoadLibraryA("opengl32.dll");
+        p = (void *)GetProcAddress(module, name);
+    }
+
+    return p;
 }
 
 /** U T I L S **/
@@ -199,23 +342,160 @@ std::vector<unsigned char> LoadBytesFromFile(const std::string &path)
  */
 std::string LoadStringFromFile(const std::string &path)
 {
-    // Открытие файла в режиме текстового чтения
-    std::ifstream is(path.c_str());
+    // Чтение файла
+    std::ifstream ifstream;
 
-    if(is.is_open())
+    // Открыть файл для текстового чтения
+    ifstream.open(path);
+
+    if (!ifstream.fail())
     {
-        is.seekg(0,std::ios::end);
-        auto size = static_cast<unsigned >(is.tellg()) + 1;
-        auto pData = new char[size];
-        is.seekg(0,std::ios::beg);
-        is.read(pData,size);
-        is.close();
-
-        // Добавляем null character в конец, для валидной работы С-строк
-        pData[size-1] = '\0';
-
-        return std::string(pData);
+        // Строковой поток
+        std::stringstream sourceStringStream;
+        // Считать в строковой поток из файла
+        sourceStringStream << ifstream.rdbuf();
+        // Закрыть файл
+        ifstream.close();
+        // Получить данные из строкового поток в строку
+        return sourceStringStream.str();
     }
 
-    return {};
+    return "";
+}
+
+/** O P E N G L **/
+
+/**
+ * \brief Установка статуса вертикальной синхронизации
+ * \param status Состояние
+ */
+void SetVSyncStatus(bool status)
+{
+    // Получаем при помощи glGetString строку с доступными расширениями
+    const char* extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+
+    // Если есть нужное расширение
+    if (strstr(extensions, "WGL_EXT_swap_control"))
+    {
+        // Получить указатель на функцию для управления вертикальной синхронизацией
+        const auto wglSwapInterval = reinterpret_cast<BOOL(APIENTRY*)(int)>(OpenGlGetFunction("wglSwapIntervalEXT"));
+        // Если удалось получить - использовать функцию, в противном случае сгенерировать исключение
+        if (wglSwapInterval) wglSwapInterval(status);
+    }
+}
+
+
+/**
+ * \brief Инициализация OpenGL и компонентов рендеринга
+ * \param screenWidth Ширина экрана
+ * \param screenHeight Высота жкрана
+ */
+void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
+{
+    (void) screenWidth;
+    (void) screenHeight;
+
+    /// Получение адресов OpenGL функций (GLAD)
+    {
+        // Установить функцию-загрузчик функций OpenGL
+        if(!gladLoadGLLoader((GLADloadproc)OpenGlGetFunction)){
+            throw std::runtime_error("OpenGL GLAD initialization error");
+        }
+        // Загрузить функции
+        if(!gladLoadGL()){
+            throw std::runtime_error("OpenGL GLAD loading error");
+        }
+    }
+
+    /// Шейдеры
+    {
+        // Получить исходники шейдеров
+        auto vsSource = LoadStringFromFile("../Shaders/01_Basic/path_tracing.vert");
+        auto fsSource = LoadStringFromFile("../Shaders/01_Basic/path_tracing.frag");
+
+        // Собрать шейдереную программу
+        g_shaderMain_ = new gl::ShaderProgram({
+            {GL_VERTEX_SHADER, vsSource.c_str()},
+            {GL_FRAGMENT_SHADER, fsSource.c_str()}
+        });
+    }
+
+    /// Ресурсы по умолчанию
+    {
+        // Геометрия квадрата на весь экран
+        g_geometryQuad_ = new gl::GeometryBuffer({
+            { { 1.0f,1.0f,0.0f },{ 1.0f,1.0f,1.0f },{ 1.0f,1.0f }, {0.0f,0.0f,1.0f} },
+            { { 1.0f,-1.0f,0.0f },{ 1.0f,1.0f,1.0f },{ 1.0f,0.0f }, {0.0f,0.0f,1.0f} },
+            { { -1.0f,-1.0f,0.0f },{ 1.0f,1.0f,1.0f },{ 0.0f,0.0f }, {0.0f,0.0f,1.0f} },
+            { { -1.0f,1.0f,0.0f },{ 1.0f,1.0f,1.0f },{ 0.0f,1.0f }, {0.0f,0.0f,1.0f} },
+            },{ 0,1,2, 0,2,3 });
+    }
+
+    /// Инициализация UBO-буферов
+    {
+        //TODO: произвести инициализацию UBO
+    }
+
+    /// Инициализация кадровых буферов
+    {
+        //TODO: произвести инициализацию кадровых буферов
+    }
+
+    /// Основные OpenGL настройки по умолчанию
+    {
+        // Передними считаются грани описанные по часовой стрелки
+        glFrontFace(GL_CW);
+        // Включить отсечение граней
+        glEnable(GL_CULL_FACE);
+        // Отсекать задние грани
+        glCullFace(GL_BACK);
+        // Тип рендеринга треугольников по умолчанию
+        glPolygonMode(GL_FRONT, GL_FILL);
+        // Функция тест глубины (Z-тест нужен лишь для отладки, для трассировки не используется)
+        glDepthFunc(GL_LEQUAL);
+        // Тест ножниц по умолчнию включен
+        glEnable(GL_SCISSOR_TEST);
+    }
+}
+
+/**
+ * \brief Рендеринг полноэкранного квадрата
+ * \param screenWidth Ширина экрана
+ * \param screenHeight Высота жкрана
+ */
+void RenderQuad(unsigned screenWidth, unsigned screenHeight)
+{
+    // Соотношение сторон
+    float aspectRatio = static_cast<float>(screenWidth) / static_cast<float>(screenHeight);
+
+    // Привязываемся ко фрейм-буфферу (временно используем основной)
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // Использовать шейдер
+    glUseProgram(g_shaderMain_->getId());
+
+    // Включить запись в цветовой буфер
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    // Указать область кадра доступную для отрисовки
+    glScissor(0, 0, screenWidth, screenHeight);
+    glViewport(0, 0, screenWidth, screenWidth);
+
+    // Очистка буфера
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Передать FOV
+    glUniform1f(g_shaderMain_->getUniformLocations()->camFov,90.0f);
+    // Передать соотношение сторон
+    glUniform1f(g_shaderMain_->getUniformLocations()->aspectRatio,aspectRatio);
+    // Передать положение камеры
+    glUniform3fv(g_shaderMain_->getUniformLocations()->camPosition, 1, glm::value_ptr(glm::vec3(0.0f)));
+    // Передать матрицу вида
+    glUniformMatrix4fv(g_shaderMain_->getUniformLocations()->viewMatrix, 1, GL_FALSE, glm::value_ptr(glm::mat4(1.0f)));
+
+    // Привязать геометрию и нарисовать ее
+    glBindVertexArray(g_geometryQuad_->getVaoId());
+    glDrawElements(GL_TRIANGLES, g_geometryQuad_->getIndexCount(), GL_UNSIGNED_INT, nullptr);
+    glBindVertexArray(0);
 }

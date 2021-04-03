@@ -26,5 +26,5 @@ else()
     set_property(TARGET ${TARGET_NAME} PROPERTY LINK_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive")
 endif()
 
-# Линковка с OpenGL
-target_link_libraries(${TARGET_NAME} Opengl32)
+# Линковка с OpenGL и вспомогательной header-only библиотекой
+target_link_libraries(${TARGET_NAME} "opengl32" "Common")
