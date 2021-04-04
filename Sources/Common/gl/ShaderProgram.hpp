@@ -13,10 +13,11 @@ namespace gl
          */
         struct UniformLocations
         {
-            GLuint aspectRatio = 0;
             GLuint camFov = 0;
             GLuint camPosition = 0;
             GLuint viewMatrix = 0;
+            GLuint camModelMatrix = 0;
+            GLuint screenSize = 0;
         };
 
     private:
@@ -66,11 +67,11 @@ namespace gl
         void initUniformLocations()
         {
             if(this->id_ == 0) return;
-
-            this->uniformLocations_.aspectRatio = glGetUniformLocation(id_, "iAspectRatio");
+            this->uniformLocations_.screenSize = glGetUniformLocation(id_, "iScreenSize");
             this->uniformLocations_.camFov = glGetUniformLocation(id_, "iCamFov");
             this->uniformLocations_.camPosition = glGetUniformLocation(id_, "iCamPosition");
             this->uniformLocations_.viewMatrix = glGetUniformLocation(id_, "iView");
+            this->uniformLocations_.camModelMatrix = glGetUniformLocation(id_,"iCamModel");
         }
 
     public:

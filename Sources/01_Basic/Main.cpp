@@ -8,8 +8,12 @@
 #include <glad/glad.h>
 #include <glm/gtc/type_ptr.hpp>
 
-#include <ShaderProgram.hpp>
-#include <GeometryBuffer.hpp>
+#include <gl/ShaderProgram.hpp>
+#include <gl/GeometryBuffer.hpp>
+#include <tools/Camera.hpp>
+#include <tools/Timer.hpp>
+
+/** W I N A P I  S T U F F **/
 
 /// Дескриптор исполняемого модуля программы
 HINSTANCE g_hInstance = nullptr;
@@ -24,7 +28,9 @@ const char* g_strClassName = "MainWindowClass";
 /// Заголовок окна
 const char* g_strWindowCaption = "01 - Basic example";
 
-/** W I N A P I  S T U F F **/
+/// Макросы для проверки состояния кнопок
+#define KEY_DOWN(vk_code) ((static_cast<uint16_t>(GetAsyncKeyState(vk_code)) & 0x8000u) ? true : false)
+#define KEY_UP(vk_code) ((static_cast<uint16_t>(GetAsyncKeyState(vk_code)) & 0x8000u) ? false : true)
 
 /**
  * \brief Обработчик оконных сообщений
@@ -49,6 +55,24 @@ HGLRC OpenGlCreateContext(HDC drawContext);
  * \return Указатель на функцию
  */
 void *OpenGlGetFunction(const char *name);
+
+/**
+ * \brief Получение координат курсора
+ * \param hwnd Дескриптор окна
+ * \return Точка с координатами
+ */
+inline POINT CursorPos(HWND hwnd){
+    POINT p;
+    if (GetCursorPos(&p)) ScreenToClient(hwnd, &p);
+    return p;
+}
+
+/**
+ * \brief Обработка ввода (клавиатура и мышь)
+ * \param camSpeed Скорость камеры (м/с)
+ * \param mouseSensitivity Чувствительность мыши
+ */
+void Controls(float camSpeed = 1.0f, float mouseSensitivity = 0.2f);
 
 /** U T I L S **/
 
@@ -94,6 +118,11 @@ void InitOpenGl(unsigned screenWidth, unsigned screenHeight);
 void RenderQuad(unsigned screenWidth, unsigned screenHeight);
 
 /** M A I N **/
+
+/// Объект камеры (хранит положение и ориентацию, матрицы трансформации координат)
+tools::Camera* g_camera = nullptr;
+/// Объект таймера
+tools::Timer* g_timer = nullptr;
 
 /**
  * \brief Точка входа
@@ -172,7 +201,15 @@ int main(int argc, char* argv[])
         // Вертикальная синхронизация
         SetVSyncStatus(false);
 
+        /** СЦЕНА **/
+
+        // Установка камеры
+        g_camera = new tools::Camera({0.0f,0.0f,1.0f},{0.0f,0.0f,0.0f});
+
         /** MAIN LOOP **/
+
+        // Таймер основного цикла (для выяснения временной дельты и FPS)
+        g_timer = new tools::Timer();
 
         // Оконное сообщение
         MSG msg = {};
@@ -180,6 +217,12 @@ int main(int argc, char* argv[])
         // Запуск цикла
         while (true)
         {
+            // Обновить таймер
+            g_timer->updateTimer();
+
+            // Обработка клавиш управления
+            Controls();
+
             // Обработка оконных сообщений
             if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
             {
@@ -190,8 +233,13 @@ int main(int argc, char* argv[])
                 }
             }
 
+            // Обновление сцены
+            g_camera->updatePlacement(g_timer->getDelta());
+
             // Рендеринг
+            GetClientRect(g_hwnd, &clientRect);
             RenderQuad(static_cast<unsigned>(clientRect.right),static_cast<unsigned>(clientRect.bottom));
+
             // Смена буферов окна
             SwapBuffers(g_hdc);
         }
@@ -306,6 +354,50 @@ void *OpenGlGetFunction(const char *name)
     }
 
     return p;
+}
+
+/**
+ * \brief Обработка ввода (клавиатура и мышь)
+ * \param camSpeed Скорость камеры (м/с)
+ * \param mouseSensitivity Чувствительность мыши
+ */
+void Controls(float camSpeed, float mouseSensitivity)
+{
+    // Координаты мыши в последнем кадре
+    static POINT lastMousePos = {0, 0};
+
+    // Вектор движения камеры
+    glm::vec3 camVelocityRel = {0.0f, 0.0f, 0.0f};
+    glm::vec3 camVelocityAbs = {0.0f, 0.0f, 0.0f};
+
+    // Состояние клавиш клавиатуры
+    if(KEY_DOWN(0x57u)) camVelocityRel.z = -1.0f; // W
+    if(KEY_DOWN(0x41u)) camVelocityRel.x = -1.0f; // A
+    if(KEY_DOWN(0x53u)) camVelocityRel.z = 1.0f;  // S
+    if(KEY_DOWN(0x44u)) camVelocityRel.x = 1.0f;  // D
+    if(KEY_DOWN(VK_SPACE)) camVelocityAbs.y = 1.0f;
+    if(KEY_DOWN(0x43u)) camVelocityAbs.y = -1.0f; // С
+
+    // Мышь
+    auto currentMousePos = CursorPos(g_hwnd);
+    if(KEY_DOWN(VK_LBUTTON))
+    {
+        // Разница в координатах мыши между текущим и предыдущим кадром
+        POINT deltaMousePos = {lastMousePos.x - currentMousePos.x, lastMousePos.y - currentMousePos.y};
+
+        // Изменить текущую ориентацию камеры
+        auto orientation = g_camera->getOrientation();
+        orientation.x += static_cast<float>(deltaMousePos.y) * mouseSensitivity;
+        orientation.y += static_cast<float>(deltaMousePos.x) * mouseSensitivity;
+        g_camera->setOrientation(orientation);
+    }
+    lastMousePos = currentMousePos;
+
+    // Установить векторы движения камеры
+    if(g_camera != nullptr){
+        g_camera->setVelocityRel((glm::length2(camVelocityRel) > 0.0f ? glm::normalize(camVelocityRel) : camVelocityRel) * camSpeed);
+        g_camera->setVelocity(camVelocityAbs * camSpeed);
+    }
 }
 
 /** U T I L S **/
@@ -465,9 +557,6 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
  */
 void RenderQuad(unsigned screenWidth, unsigned screenHeight)
 {
-    // Соотношение сторон
-    float aspectRatio = static_cast<float>(screenWidth) / static_cast<float>(screenHeight);
-
     // Привязываемся ко фрейм-буфферу (временно используем основной)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -479,7 +568,7 @@ void RenderQuad(unsigned screenWidth, unsigned screenHeight)
 
     // Указать область кадра доступную для отрисовки
     glScissor(0, 0, screenWidth, screenHeight);
-    glViewport(0, 0, screenWidth, screenWidth);
+    glViewport(0, 0, screenWidth, screenHeight);
 
     // Очистка буфера
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
@@ -487,12 +576,14 @@ void RenderQuad(unsigned screenWidth, unsigned screenHeight)
 
     // Передать FOV
     glUniform1f(g_shaderMain_->getUniformLocations()->camFov,90.0f);
-    // Передать соотношение сторон
-    glUniform1f(g_shaderMain_->getUniformLocations()->aspectRatio,aspectRatio);
+    // Передать размеры экрана
+    glUniform2fv(g_shaderMain_->getUniformLocations()->screenSize, 1, glm::value_ptr(glm::vec2(static_cast<float>(screenWidth),static_cast<float>(screenHeight))));
     // Передать положение камеры
-    glUniform3fv(g_shaderMain_->getUniformLocations()->camPosition, 1, glm::value_ptr(glm::vec3(0.0f)));
+    glUniform3fv(g_shaderMain_->getUniformLocations()->camPosition, 1, glm::value_ptr(g_camera->getPosition()));
     // Передать матрицу вида
-    glUniformMatrix4fv(g_shaderMain_->getUniformLocations()->viewMatrix, 1, GL_FALSE, glm::value_ptr(glm::mat4(1.0f)));
+    glUniformMatrix4fv(g_shaderMain_->getUniformLocations()->viewMatrix, 1, GL_FALSE, glm::value_ptr(g_camera->getViewMatrix()));
+    // Передать матрицу модели камеры
+    glUniformMatrix4fv(g_shaderMain_->getUniformLocations()->camModelMatrix, 1, GL_FALSE, glm::value_ptr(g_camera->getModelMatrix()));
 
     // Привязать геометрию и нарисовать ее
     glBindVertexArray(g_geometryQuad_->getVaoId());
