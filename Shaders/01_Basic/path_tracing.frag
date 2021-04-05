@@ -1,5 +1,7 @@
 #version 330 core
 
+#define M_PI 3.141592
+
 #define SAMPLES 1
 
 /*Схема входа-выхода*/
@@ -23,6 +25,7 @@ uniform vec3 iCamPosition;
 uniform float iCamFov;
 uniform mat4 iView;
 uniform mat4 iCamModel;
+uniform float iTime;
 
 /*Вход*/
 
@@ -32,6 +35,34 @@ in VS_OUT
 } fs_in;
 
 /*Функции*/
+
+/**
+ * Используется для генерции псевдослучайного значения от 0 до 1
+ * \param seed Семя рандомизации (значение изменябщееся для каждого пикселя и,если необходимо, для каждого кадра)
+ * \return Значение от 0 до 1
+ */
+float hash1(inout float seed) {
+    return fract(sin(seed += 0.1)*43758.5453123);
+}
+
+/**
+ * Используется для генерции пары псевдослучайных значений от 0 до 1
+ * \param seed Семя рандомизации (значение изменябщееся для каждого пикселя и,если необходимо, для каждого кадра)
+ * \return 2D-вектор со значениями компонентов от 0 до 1
+ */
+vec2 hash2(inout float seed) {
+    return fract(sin(vec2(seed+=0.1,seed+=0.1))*vec2(43758.5453123,22578.1459123));
+}
+
+/**
+ * Используется для генерции тройки псевдослучайных значений от 0 до 1
+ * \param seed Семя рандомизации (значение изменябщееся для каждого пикселя и,если необходимо, для каждого кадра)
+ * \return 3D-вектор со значениями компонентов от 0 до 1
+ */
+vec3 hash3(inout float seed) {
+    return fract(sin(vec3(seed+=0.1,seed+=0.1,seed+=0.1))*vec3(43758.5453123,22578.1459123,19642.3490423));
+}
+
 
 /**
  * Пересечение луча со сферой
@@ -93,14 +124,14 @@ bool raySphereIntersection(Ray ray, vec3 position, float radius, float tMin, flo
  * \param fov Угол обзора
  * \param aspectRatio Соотношение сторон
  * \param fragCoord Текстурные координаты фрамента
- * \param pixelBias Суб-пиксельное смещение для мульти-семплинга
+ * \param pixelBias Суб-пиксельное смещение для мульти-семплинга в текстурных координатах
  * \return Вектор направления
  */
 vec3 getRayDirection(float fov, float aspectRatio, vec2 fragCoord, vec2 pixelBias)
 {
     // Преобразовать текстурные координаты (0;1) в клип-координаты экрана (-1;1)
     // К координатам также добавляется суб-пиксельное смещение (используется при мультисемплинге)
-    vec2 clipCoords = (fragCoord * 2.0) - vec2(1.0) + pixelBias;
+    vec2 clipCoords = ((fragCoord + pixelBias) * 2.0) - vec2(1.0);
 
     // Вектор направления с учетом угла обзора (fov) и пропорций экрана (aspectRatio)
     vec3 direction = vec3(
@@ -116,11 +147,34 @@ vec3 getRayDirection(float fov, float aspectRatio, vec2 fragCoord, vec2 pixelBia
 }
 
 /**
+ * Инициализация "семени" для случайных чисел
+ * \param useTime Использовать время для рандомизации
+ * \return Значение "семени"
+ */
+float initRndSeed(bool useTime)
+{
+    // Положение пикселя в clip-пространстве
+    vec2 p = -1.0 + 2.0 * (fs_in.uv);
+    p.x *= (iScreenSize.x/iScreenSize.y);
+
+    // Использовать для ssed положение пикселя (псевдослучайные значения будут отличаться для каждого пикселя)
+    float seed = p.x + fract(p.y * 18753.43121412313);
+
+    // Если нужно использовать время (псевдослучайные значения будут отличаться для каждого кадра)
+    if(useTime) seed += fract(12.12345314312*iTime);
+
+    return seed;
+}
+
+/**
  * Основная функция фрагментного шейдера
  * Каждый фрамент растеризуемого полноэкранного квадрата (каждый пиксель экрана) соответствует одному или нескольким лучам
  */
 void main()
 {
+    // Инициализировать "семя" для случайных чисел
+    float seed = initRndSeed(false);
+
     // Тестовая сфера
     vec4 sphere = vec4(0.0f,0.0f,-2.0f,1.0f);
 
@@ -130,9 +184,8 @@ void main()
     // Для каждого семпла
     for(int i = 0; i < SAMPLES; i++)
     {
-        // Отклонение от центра пикселя
-        // TODO: в случае с кол-вом семплов большим чем единица отклонение должно быть случайным
-        vec2 pixelBias = vec2(1.0f / iScreenSize.x, 1.0f / iScreenSize.y);
+        // Отклонение от центра пикселя для семпла
+        vec2 pixelBias = vec2(1.0f / iScreenSize.x, 1.0f / iScreenSize.y) * (SAMPLES > 1 ? hash2(seed) : vec2(0.5f));
 
         // Генерация луча
         Ray ray = Ray(
@@ -149,7 +202,7 @@ void main()
         }
     }
 
-    // Усреднить по кол-во семплов на пиксель
+    // Усреднить по кол-ву семплов на пиксель
     resultColor /= SAMPLES;
 
     // Присваиваем красный цвет (временно)

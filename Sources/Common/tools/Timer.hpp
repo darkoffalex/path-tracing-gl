@@ -9,13 +9,23 @@ namespace tools
     class Timer
     {
     private:
+        /// Время текущего кадра
         time_point<high_resolution_clock> currentFrameTick_;
+        /// Время предыдущего кадра
         time_point<high_resolution_clock> previousFrameTick_;
+        /// Время последнего обновления FPS счетчика
         time_point<high_resolution_clock> lastFpsCounterUpdatedTime_;
+        /// Время первой инициализации объекта
+        time_point<high_resolution_clock> initializationTime_;
+        /// Кол-во кадров (для нужд FPS счетчика)
         unsigned framesCount_;
+        /// FPS счетчик (обновляется каждую секунду)
         unsigned fps_;
-        float delta_;
+        /// FPS счтчик готов к показу (каждую секунду, после обновления счетчика, становится true на один тик)
         bool fpsCounterReady_;
+        /// Время между кадрами
+        float delta_;
+
 
     public:
 
@@ -28,8 +38,12 @@ namespace tools
                 lastFpsCounterUpdatedTime_(std::chrono::high_resolution_clock::now()),
                 framesCount_(0),
                 fps_(0),
-                delta_(0.0f),
-                fpsCounterReady_(false) {}
+                fpsCounterReady_(false),
+                delta_(0.0f)
+        {
+            // Получить время инициализации траймера
+            initializationTime_ = std::chrono::high_resolution_clock::now();
+        }
 
         /**
          * Получить разницу во времени между текущим и предыдущим кадром
@@ -38,6 +52,18 @@ namespace tools
         [[nodiscard]] float getDelta() const
         {
             return delta_;
+        }
+
+        /**
+         * Получить время прошедшее с инициализации таймера (в секундах)
+         * \return Значение времени в секунддах
+         */
+        [[nodiscard]] float getCurrentTime()
+        {
+            // Сколько времени прошло с создания таймера
+            const int64_t delta = std::chrono::duration_cast<std::chrono::microseconds>(currentFrameTick_ - initializationTime_).count();
+            // Вернуть время в секундах
+            return static_cast<float>(delta) / 1000000.0f;
         }
 
         /**

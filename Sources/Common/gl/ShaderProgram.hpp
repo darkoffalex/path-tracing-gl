@@ -18,6 +18,7 @@ namespace gl
             GLuint viewMatrix = 0;
             GLuint camModelMatrix = 0;
             GLuint screenSize = 0;
+            GLuint time = 0;
         };
 
     private:
@@ -72,6 +73,7 @@ namespace gl
             this->uniformLocations_.camPosition = glGetUniformLocation(id_, "iCamPosition");
             this->uniformLocations_.viewMatrix = glGetUniformLocation(id_, "iView");
             this->uniformLocations_.camModelMatrix = glGetUniformLocation(id_,"iCamModel");
+            this->uniformLocations_.time = glGetUniformLocation(id_,"iTime");
         }
 
     public:

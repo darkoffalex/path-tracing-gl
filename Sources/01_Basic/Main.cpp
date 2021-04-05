@@ -168,7 +168,7 @@ int main(int argc, char* argv[])
                 g_strWindowCaption,
                 WS_OVERLAPPEDWINDOW,
                 0, 0,
-                800, 600,
+                800, 480,
                 nullptr,
                 nullptr,
                 g_hInstance,
@@ -575,7 +575,7 @@ void RenderQuad(unsigned screenWidth, unsigned screenHeight)
     glClear(GL_COLOR_BUFFER_BIT);
 
     // Передать FOV
-    glUniform1f(g_shaderMain_->getUniformLocations()->camFov,90.0f);
+    glUniform1f(g_shaderMain_->getUniformLocations()->camFov, 90.0f);
     // Передать размеры экрана
     glUniform2fv(g_shaderMain_->getUniformLocations()->screenSize, 1, glm::value_ptr(glm::vec2(static_cast<float>(screenWidth),static_cast<float>(screenHeight))));
     // Передать положение камеры
@@ -584,6 +584,8 @@ void RenderQuad(unsigned screenWidth, unsigned screenHeight)
     glUniformMatrix4fv(g_shaderMain_->getUniformLocations()->viewMatrix, 1, GL_FALSE, glm::value_ptr(g_camera->getViewMatrix()));
     // Передать матрицу модели камеры
     glUniformMatrix4fv(g_shaderMain_->getUniformLocations()->camModelMatrix, 1, GL_FALSE, glm::value_ptr(g_camera->getModelMatrix()));
+    // Передать текущее время выполнения программы
+    glUniform1f(g_shaderMain_->getUniformLocations()->time, g_timer->getCurrentTime());
 
     // Привязать геометрию и нарисовать ее
     glBindVertexArray(g_geometryQuad_->getVaoId());
