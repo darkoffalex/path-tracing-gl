@@ -1,8 +1,10 @@
 #version 330 core
 
 #define M_PI 3.141592
+#define M_RAD 57.2958
 
-#define SAMPLES 1
+#define SAMPLES 8
+#define PATH_LENGHT 3
 
 /*Схема входа-выхода*/
 
@@ -10,12 +12,32 @@ layout (location = 0) out vec4 color;        // Итоговый цвет фра
 
 /*Вспомогательные типы*/
 
-// Луч
+/**
+ * Луч
+ */
 struct Ray
 {
+    // Точка начала луча
     vec3 origin;
+    // Направление
     vec3 direction;
-    float weight;
+};
+
+/**
+ * Информация о пересечении луча со сценой
+ */
+struct RayHitInfo
+{
+    // Точка пересечения
+    vec3 point;
+    // Нормаль в точке пересечения
+    vec3 normal;
+    // Расстояние
+    float t;
+    // Является ли поверность лицевой
+    bool isFrontFace;
+    // Индекс материала (для дальнейшего)
+    int materialIndex;
 };
 
 /*Uniform*/
@@ -120,6 +142,59 @@ bool raySphereIntersection(Ray ray, vec3 position, float radius, float tMin, flo
 }
 
 /**
+ * Пересечение луча со сферой
+ * \param ray Луч
+ * \param tMin Минимальное расстояние до точки пересечения
+ * \param tMax Максимальное расстояние до точки пересечения
+ * \param hitInfo Информация о пересечении
+ * \return Было ли пересечение с объектом
+ */
+bool raySceneIntersection(Ray ray, float tMin, float tMax, inout RayHitInfo hitInfo)
+{
+    // Было ли пересечение
+    bool hit = false;
+    // Ближайшее пересечение
+    float tClosest = tMax;
+    // Расстояние до точки пересечения
+    float t = 0;
+
+    // Набор примитивов сцены
+    int primitiveCount = 2;
+    // TODO: предусмотреть другие виды примитивов
+    vec4[] spheres = vec4[](
+        vec4(0.0f,0.0f,-2.0f,1.0f),
+        vec4(0.0f,-6.0f,-2.0f,5.0f)
+    );
+
+    // Пройтись по примитивам
+    for(int i = 0; i < primitiveCount; i++)
+    {
+        if(raySphereIntersection(ray,spheres[i].xyz,spheres[i].w,tMin,tMax,t) && t < tClosest)
+        {
+            // Пересечние засчитано
+            hit = true;
+            // Обновить расстояние ближ. пересечения
+            tClosest = t;
+
+            // Информация о пересечении
+            hitInfo.t = t;
+            hitInfo.point = ray.origin + ray.direction * t;
+            hitInfo.normal = normalize(hitInfo.point - spheres[i].xyz);
+            hitInfo.materialIndex = 0;
+            hitInfo.isFrontFace = true;
+
+            // Если нормаль не направлена против луча, считать что это обратная сторона (и инвертировать нормаль)
+            if(dot(-(ray.direction),hitInfo.normal) < 0.0f){
+                hitInfo.normal *= -1;
+                hitInfo.isFrontFace = false;
+            }
+        }
+    }
+
+    return hit;
+}
+
+/**
  * Получение направления луча в мировом пространстве
  * \param fov Угол обзора
  * \param aspectRatio Соотношение сторон
@@ -127,7 +202,7 @@ bool raySphereIntersection(Ray ray, vec3 position, float radius, float tMin, flo
  * \param pixelBias Суб-пиксельное смещение для мульти-семплинга в текстурных координатах
  * \return Вектор направления
  */
-vec3 getRayDirection(float fov, float aspectRatio, vec2 fragCoord, vec2 pixelBias)
+vec3 getCamRayDirection(float fov, float aspectRatio, vec2 fragCoord, vec2 pixelBias)
 {
     // Преобразовать текстурные координаты (0;1) в клип-координаты экрана (-1;1)
     // К координатам также добавляется суб-пиксельное смещение (используется при мультисемплинге)
@@ -146,6 +221,7 @@ vec3 getRayDirection(float fov, float aspectRatio, vec2 fragCoord, vec2 pixelBia
     return normalize(directionWorld);
 }
 
+
 /**
  * Инициализация "семени" для случайных чисел
  * \param useTime Использовать время для рандомизации
@@ -157,7 +233,7 @@ float initRndSeed(bool useTime)
     vec2 p = -1.0 + 2.0 * (fs_in.uv);
     p.x *= (iScreenSize.x/iScreenSize.y);
 
-    // Использовать для ssed положение пикселя (псевдослучайные значения будут отличаться для каждого пикселя)
+    // Использовать для seed положение пикселя (псевдослучайные значения будут отличаться для каждого пикселя)
     float seed = p.x + fract(p.y * 18753.43121412313);
 
     // Если нужно использовать время (псевдослучайные значения будут отличаться для каждого кадра)
@@ -167,16 +243,105 @@ float initRndSeed(bool useTime)
 }
 
 /**
+ * Получить случайное направление в пределах ориентированной полусферы
+ * \param dir Направление ориентированности полсферы
+ * \param seed "Семя" рандомизации
+ * \return Вектор
+ */
+vec3 getHemisphereRndDir(vec3 dir, inout float seed)
+{
+    // Вектор перпендикулярный вектору направления
+    vec3 b = normalize(cross(dir, dir + vec3(0.01f)));
+    // Второй перпендикулярный вектор
+    vec3 c = normalize(cross(dir, b));
+
+    // Случайные углы
+    // Для более равномерного распределения используем не случайный угол, но случайную точку на высоте полсферы
+    // При помощи данной выосты получаем случайный угол theta
+
+    // Fi - угол вектора вращяющегося вокруг направления dir [0:360]
+    // Theta - угол между итоговым вектором и направлением dir (полярный угол) [0:90]
+    float fi = hash1(seed) * 360.0f / M_RAD;
+    float theta = acos(hash1(seed));
+
+    // Вектор описывающий круг вокруг направления dir
+    vec3 d = b * cos(fi) + c * sin(fi);
+    // Вектор отклоненный от dir на случайный угол theta
+    return dir * cos(theta) + d * sin(theta);
+}
+
+/**
+ * Получить случайное направление в пределах ориентированной полусферы (взавшанное по косинусу)
+ * В отличии от равномерного распределения, данный метод разбрасывает случайные направления гуще к полюсу полусферы (по закону косинуса)
+ * Это дает возможность выбирать только наиболее значимые направления, и отбросить часть затеняемых косинусом лучей.
+ * При использовании этого метода затенение по закону косинуса следует отключить
+ * \param dir Направление ориентированности полсферы
+ * \param seed "Семя" рандомизации
+ * \return Вектор
+ */
+vec3 getHemisphereRndDirCosWeight(vec3 dir, inout float seed)
+{
+    vec2 u = hash2(seed);
+
+    float r = sqrt(u.x);
+    float theta = 2.0 * M_PI * u.y;
+
+    vec3 B = normalize(cross(dir, vec3(0.0,1.0,1.0)));
+    vec3 T = cross(B, dir);
+
+    return normalize(r * sin(theta) * B + sqrt(1.0 - u.x) * dir + r * cos(theta) * T);
+}
+
+
+/**
+ * Трассировка пути луча из камеры
+ * \param ray Исходный луч
+ * \param seed "Семя" рандомизации
+ * \return Итоговый цвет
+ */
+vec3 traceEyePath(in Ray ray, inout float seed)
+{
+    // Итоговый цвет
+    vec3 resultColor = vec3(0.0f);
+    // Кол-во света, изменяющиеся в процессе пути (в результате отскоков)
+    // Оно будет назначено итоговому цвету если в конце луч достигнет источника/неба
+    vec3 light = vec3(1.0f);
+
+    // Простроить путь луча
+    for(int i = 0; i < PATH_LENGHT; i++)
+    {
+        // Информация о пересечении
+        RayHitInfo hitInfo;
+
+        // Если пересечение НЕ состоялось (считать это попаданием луча в источника света/небо)
+        if(!raySceneIntersection(ray, 0.01f, 1000.0f, hitInfo)){
+            // Установить цвет
+            resultColor = light;
+            // Оборвать цикл
+            break;
+        }
+
+        // Исходим из того что цикл не был оборван
+        // Нужно обновить начало и направление луча
+        ray.origin = hitInfo.point;
+        ray.direction = getHemisphereRndDir(hitInfo.normal, seed);
+
+        // Свет тускнеет по закону косинуса (только для равного распределения по полусфере)
+        light *= 2.0 * dot(ray.direction, hitInfo.normal);
+    }
+
+    // Вернуть итоговый цвет
+    return resultColor;
+}
+
+/**
  * Основная функция фрагментного шейдера
  * Каждый фрамент растеризуемого полноэкранного квадрата (каждый пиксель экрана) соответствует одному или нескольким лучам
  */
 void main()
 {
     // Инициализировать "семя" для случайных чисел
-    float seed = initRndSeed(false);
-
-    // Тестовая сфера
-    vec4 sphere = vec4(0.0f,0.0f,-2.0f,1.0f);
+    float seed = initRndSeed(true);
 
     // Итоговый цвет
     vec3 resultColor = vec3(0.0f);
@@ -184,26 +349,24 @@ void main()
     // Для каждого семпла
     for(int i = 0; i < SAMPLES; i++)
     {
-        // Отклонение от центра пикселя для семпла
+        // Случайное суб-пиксельное отклонение начального луча
         vec2 pixelBias = vec2(1.0f / iScreenSize.x, 1.0f / iScreenSize.y) * (SAMPLES > 1 ? hash2(seed) : vec2(0.5f));
+        //vec2 pixelBias = vec2(0.0f);
 
-        // Генерация луча
-        Ray ray = Ray(
+        // Генерация луча из камеры
+        Ray camRay = Ray(
             (iCamModel * vec4(0.0f,0.0f,0.0f,1.0f)).xyz,
-            getRayDirection(iCamFov, iScreenSize.x/iScreenSize.y, fs_in.uv, pixelBias),
-            1.0f
+            getCamRayDirection(iCamFov, iScreenSize.x/iScreenSize.y, fs_in.uv, pixelBias)
         );
 
-        // Расстояние до пересечения
-        float t = 0.0f;
-        // Если было пересечение
-        if(raySphereIntersection(ray, sphere.xyz, sphere.w, 0.01f, 1000.0f, t)){
-            resultColor += vec3(1.0f,0.0f,0.0f);
-        }
+        // Построить путь луча и получить итоговый цвет
+        resultColor += traceEyePath(camRay, seed);
     }
 
     // Усреднить по кол-ву семплов на пиксель
     resultColor /= SAMPLES;
+
+    //resultColor = pow(clamp(resultColor,0.0,1.0),vec3(0.45));
 
     // Присваиваем красный цвет (временно)
     color = vec4(resultColor,1.0f);
