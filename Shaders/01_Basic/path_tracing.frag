@@ -5,10 +5,11 @@
 #define M_RAD 57.2958
 
 // Кол-во семплов на 1 пиксель
-#define SAMPLES 8
+#define SAMPLES 128
 // Кол-во отскоков луча
 #define PATH_LENGHT 3
 // Типы материалов
+#define MATERIAL_LIGHT 0
 #define MATERIAL_LAMBERT 1
 #define MATERIAL_METALLIC 2
 #define MATERIAL_DIELECTRIC 3
@@ -48,8 +49,15 @@ struct RayHitInfo
     float t;
     // Является ли поверность лицевой
     bool isFrontFace;
+
     // Тип материала
     int materialType;
+    // Собственный цвет
+    vec3 albedo;
+    // Шероховатость (для металлов)
+    float roughness;
+    // Коэффициент преломления (для диэлектриков)
+    float refraction;
 };
 
 /**
@@ -59,21 +67,28 @@ struct Primitive
 {
     // Тип примитива
     int type;
-    // Данные для типа "сфера"
-    vec4 sphere;
-    // Данные для типа "плоскость"
+    // Положение центра примитива
+    vec3 position;
+    // Ориентация примитива
+    vec3 orientation;
+    // Параметры для типа "сфера"
+    float sphereRadius;
+    // Параметры для типа "плоскость"
     vec3 planeNormal;
-    vec3 planePoint;
-    // Трансформация примитива (для типов "прямоугольник, параллелипипед")
-    mat4 transform;
+    // Параметры для типа "прямоугольник"
+    vec2 rectSizes;
+    // Параметры для типа "ящик"
+    vec3 boxSizes;
+
     // Тип материала
     int materialType;
     // Собственный цвет
     vec3 albedo;
-    // Шероховатость для материала типа "метал"
-    float metalRoughness;
-    // Индекс преломления для материала типа "диэлектрирк"
-    float refractionIndex;
+    // Шероховатость (для металлов)
+    float roughness;
+    // Коэффициент преломления (для диэлектриков)
+    float refraction;
+
 };
 
 /*Uniform*/
@@ -205,6 +220,32 @@ vec3 rayDirRndHemisphere(vec3 dir, inout float seed)
 }
 
 //-----------------------------------------------------
+// Математика
+//-----------------------------------------------------
+
+/**
+ * Получить матрицу поворота
+ * \param angles Углы в градусах
+ * \return Матрица 3x3
+ */
+mat3 rotate(vec3 angles)
+{
+    // Углы в радианах
+    vec3 ar = vec3(
+        angles.x * (M_PI / 180.0f),
+        angles.y * (M_PI / 180.0f),
+        angles.z * (M_PI / 180.0f)
+    );
+
+    // Собрать матрицу поворота
+    return mat3(
+        vec3(cos(ar.z)*cos(ar.y), sin(ar.z)*cos(ar.y), -sin(ar.y)),
+        vec3(cos(ar.z)*sin(ar.y)* sin(ar.x)-sin(ar.z)*cos(ar.x), sin(ar.z)*sin(ar.y)*sin(ar.x)+cos(ar.z)*cos(ar.x), cos(ar.y)*sin(ar.x)),
+        vec3(cos(ar.z)*sin(ar.y)*cos(ar.x)+sin(ar.z)*sin(ar.x), sin(ar.z)*sin(ar.y)*cos(ar.x)-cos(ar.z)*sin(ar.x), cos(ar.y)*cos(ar.x))
+    );
+}
+
+//-----------------------------------------------------
 // Пересечения луча с примитивами
 //-----------------------------------------------------
 
@@ -301,6 +342,41 @@ bool intersectPlane(Ray ray, vec3 normal, vec3 p0, float tMin, float tMax, inout
     return false;
 }
 
+/**
+ * Пересечение с прямоугольником выровненным по осям (на плоскости XY)
+ * \param ray Луч
+ * \param z Положение прямоугольника на оси Z
+ * \param xMin Минимальная граница прямоугольника по X
+ * \param xMax Максимальная граница прямоугольника по X
+ * \param yMin Минимальная граница прямоугольника по Y
+ * \param yMax Максимальная граница прямоугольника по Y
+ * \param tMin Минимальное расстояние до точки пересечения
+ * \param tMax Максимальное расстояние до точки пересечения
+ * \param tOut Расстояние от начала, до точки пересечения
+ * \return Было ли пересечение с объектом
+ */
+bool intersectAaRectangleXy(Ray ray, float z, float xMin, float xMax, float yMin, float yMax, float tMin, float tMax, inout float tOut)
+{
+    // Выражаем параметр t если известна одна из осей
+    float t = (z - ray.origin.z) / ray.direction.z;
+
+    // Если длина направляющего вектора в допустимых пределах
+    if(t > 0 && t >= tMin && t <= tMax)
+    {
+        // Координаты по двум другим осям при параметре t
+        float x = ray.origin.x + ray.direction.x * t;
+        float y = ray.origin.y + ray.direction.y * t;
+
+        // Если все величины в допустимых пределах - пересечение засчитывается
+        if(x >= xMin && x <= xMax && y >= yMin && y <= yMax){
+            tOut = t;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 //-----------------------------------------------------
 // Основное
 //-----------------------------------------------------
@@ -320,38 +396,40 @@ bool intersectPrimitive(Ray ray, Primitive primitive, float tMin, float tMax, in
     // Засчитано ли пересечение
     bool hit = false;
 
+    // Для того чтобы трансформировать объект (положение, ориентацию) нужно применить обратную трансформацию к лучу
+    // T.е сдвигается не сам объект, а луч относительно объекта.
+    mat3 inverseRotation = length(primitive.orientation) > 0.0f ? rotate(-primitive.orientation) : mat3(1.0f);
+    mat3 rotation = length(primitive.orientation) > 0.0f ? rotate(primitive.orientation) : mat3(1.0f);
+
+    // Трансформированный луч (в пространстве примитива)
+    Ray rayTransformed = Ray(inverseRotation * (ray.origin - primitive.position),inverseRotation * ray.direction);
+
+    // Нормаль (вычисляется по разному в зависимости от типа примитива)
+    vec3 normal = vec3(0.0f);
+
     // Обработать разные типы примитивов
     switch(primitive.type)
     {
         case PRIMITIVE_SPHERE:
         {
-            hit = intersectSphere(ray, primitive.sphere.xyz, primitive.sphere.w, tMin, tMax, t);
-            if(hit){
-                hitInfo.t = t;
-                hitInfo.point = ray.origin + ray.direction * hitInfo.t;
-                hitInfo.normal = normalize(hitInfo.point - primitive.sphere.xyz);
-                hitInfo.materialType = primitive.materialType;
-                hitInfo.isFrontFace = true;
-            }
+            hit = intersectSphere(rayTransformed, vec3(0.0f), primitive.sphereRadius, tMin, tMax, t);
+            if(hit) normal = normalize(rayTransformed.origin + (rayTransformed.direction * t));
             break;
         }
 
         case PRIMITIVE_PLANE:
         {
-            hit = intersectPlane(ray, primitive.planeNormal, primitive.planePoint, tMin, tMax, t);
-            if(hit){
-                hitInfo.t = t;
-                hitInfo.point = ray.origin + ray.direction * hitInfo.t;
-                hitInfo.normal = primitive.planeNormal;
-                hitInfo.materialType = primitive.materialType;
-                hitInfo.isFrontFace = true;
-            }
+            hit = intersectPlane(rayTransformed, primitive.planeNormal, vec3(0.0f), tMin, tMax, t);
+            if(hit) normal = primitive.planeNormal;
             break;
         }
 
         case PRIMITIVE_RECT:
         {
-            //TODO: Обработка пересечения с прямоугольником
+            float hw = primitive.rectSizes.x / 2.0f;
+            float hh = primitive.rectSizes.y / 2.0f;
+            hit = intersectAaRectangleXy(rayTransformed, 0.0f, -hw, hw, -hh, hh, tMin, tMax, t);
+            if(hit) normal = vec3(0.0f,0.0f,1.0f);
             break;
         }
 
@@ -360,6 +438,20 @@ bool intersectPrimitive(Ray ray, Primitive primitive, float tMin, float tMax, in
             //TODO: Обработка пересечения с коробкой
             break;
         }
+    }
+
+    // Если пересечение засчитано - передать информацию о пересечении
+    if(hit)
+    {
+        hitInfo.t = t;
+        hitInfo.point = ray.origin + ray.direction * t;
+        hitInfo.normal = rotation * normal;
+        hitInfo.isFrontFace = true;
+
+        hitInfo.materialType = primitive.materialType;
+        hitInfo.albedo = primitive.albedo;
+        hitInfo.roughness = primitive.roughness;
+        hitInfo.refraction = primitive.refraction;
     }
 
     return hit;
@@ -386,32 +478,22 @@ bool intersectScene(Ray ray, float tMin, float tMax, inout RayHitInfo hitInfo)
 
     // Массив примитивов
     Primitive[] primitives = Primitive[](
-        Primitive(
-            PRIMITIVE_SPHERE,
-            vec4(0.0f,0.0f,-2.0f,1.0f),
-            vec3(0.0f),
-            vec3(0.0f),
-            mat4(1.0f),
-            MATERIAL_LAMBERT,
-            vec3(1.0f),
-            1.0f,
-            1.0f
-        ),
-        Primitive(
-            PRIMITIVE_PLANE,
-            vec4(0.0f),
-            vec3(0.0f,1.0f,0.0f),
-            vec3(0.0f,-1.05f,0.0f),
-            mat4(1.0f),
-            MATERIAL_LAMBERT,
-            vec3(1.0f),
-            1.0f,
-            1.0f
-        )
+        Primitive(PRIMITIVE_PLANE, vec3(0.0f,5.0f,0.0f), vec3(0.0f),0.0f,vec3(0.0f,-1.0f,0.0f),vec2(0.0f),vec3(0.0f),
+            MATERIAL_LAMBERT,vec3(1.0f),0.0f,0.0f),
+        Primitive(PRIMITIVE_PLANE, vec3(0.0f,-5.0f,0.0f), vec3(0.0f),0.0f,vec3(0.0f,1.0f,0.0f),vec2(0.0f),vec3(0.0f),
+            MATERIAL_LAMBERT,vec3(1.0f),0.0f,0.0f),
+        Primitive(PRIMITIVE_PLANE, vec3(0.0f,0.0f,-5.0f), vec3(0.0f),0.0f,vec3(0.0f,0.0f,1.0f),vec2(0.0f),vec3(0.0f),
+            MATERIAL_LAMBERT,vec3(1.0f),0.0f,0.0f),
+        Primitive(PRIMITIVE_PLANE, vec3(-5.0f,0.0f,0.0f), vec3(0.0f),0.0f,vec3(1.0f,0.0f,0.0f),vec2(0.0f),vec3(0.0f),
+            MATERIAL_LAMBERT,vec3(0.65f, 0.05f, 0.05f),0.0f,0.0f),
+        Primitive(PRIMITIVE_PLANE, vec3(5.0f,0.0f,0.0f), vec3(0.0f),0.0f,vec3(-1.0f,0.0f,0.0f),vec2(0.0f),vec3(0.0f),
+            MATERIAL_LAMBERT,vec3(0.12f, 0.45f, 0.15f),0.0f,0.0f),
+        Primitive(PRIMITIVE_RECT,vec3(0.0f,4.95f,0.0f),vec3(90.0f,0.0f,0.0f),0.0f,vec3(0.0f),vec2(3.0f,3.0f),vec3(0.0f),
+            MATERIAL_LIGHT,vec3(15.0f),0.0f,0.0f)
     );
 
     // Пройтись по примитивам
-    for(int i = 0; i < 2; i++)
+    for(int i = 0; i < 6; i++)
     {
         // Если пересечение с ближайшим примитивом засчитано
         if(intersectPrimitive(ray,primitives[i],tMin,tMax,t,hitIngoResult) && t < tClosest){
@@ -430,7 +512,6 @@ bool intersectScene(Ray ray, float tMin, float tMax, inout RayHitInfo hitInfo)
 
     return hit;
 }
-
 
 /**
  * Трассировка пути луча из камеры
@@ -452,8 +533,13 @@ vec3 traceEyePath(in Ray ray, inout float seed)
         // Информация о пересечении
         RayHitInfo hitInfo;
 
-        // Если пересечение НЕ состоялось (считать это попаданием луча в источника света/небо)
-        if(!intersectScene(ray, 0.01f, 1000.0f, hitInfo)){
+        // Было ли пересечение
+        bool hit = intersectScene(ray, 0.01f, 1000.0f, hitInfo);
+
+        // Если пересечение НЕ состоялось либо состоялось с источником
+        if(hit && hitInfo.materialType == MATERIAL_LIGHT && hitInfo.isFrontFace){
+            // Если это был источник - домножить собранное кол-света на его цвет
+            if(hit) light *= hitInfo.albedo;
             // Установить цвет
             resultColor = light;
             // Оборвать цикл
@@ -464,6 +550,9 @@ vec3 traceEyePath(in Ray ray, inout float seed)
         // Нужно обновить начало и направление луча
         ray.origin = hitInfo.point;
         ray.direction = rayDirRndHemisphere(hitInfo.normal, seed);
+
+        // В результате переотражений поверхности передают свой цвет лучу
+        light *= hitInfo.albedo;
 
         // Свет тускнеет по закону косинуса (только для равного распределения по полусфере)
         light *= 2.0 * dot(ray.direction, hitInfo.normal);
@@ -505,6 +594,7 @@ void main()
     resultColor /= SAMPLES;
 
     //resultColor = pow(clamp(resultColor,0.0,1.0),vec3(0.45));
+    resultColor = sqrt(clamp(resultColor,0.0,1.0));
 
     // Присваиваем красный цвет (временно)
     color = vec4(resultColor,1.0f);

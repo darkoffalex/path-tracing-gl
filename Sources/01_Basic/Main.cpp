@@ -72,7 +72,7 @@ inline POINT CursorPos(HWND hwnd){
  * \param camSpeed Скорость камеры (м/с)
  * \param mouseSensitivity Чувствительность мыши
  */
-void Controls(float camSpeed = 1.0f, float mouseSensitivity = 0.2f);
+void Controls(float camSpeed = 1.5f, float mouseSensitivity = 0.2f);
 
 /** U T I L S **/
 
@@ -204,7 +204,7 @@ int main(int argc, char* argv[])
         /** СЦЕНА **/
 
         // Установка камеры
-        g_camera = new tools::Camera({0.0f,0.0f,1.0f},{0.0f,0.0f,0.0f});
+        g_camera = new tools::Camera({0.0f,0.0f,10.0f},{0.0f,0.0f,0.0f});
 
         /** MAIN LOOP **/
 
