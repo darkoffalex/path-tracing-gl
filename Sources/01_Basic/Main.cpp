@@ -415,7 +415,7 @@ std::vector<unsigned char> LoadBytesFromFile(const std::string &path)
     if (is.is_open())
     {
         is.seekg(0,std::ios::end);
-        auto size = is.tellg();
+        auto size = static_cast<int>(is.tellg());
         auto pData = new char[size];
         is.seekg(0, std::ios::beg);
         is.read(pData,size);

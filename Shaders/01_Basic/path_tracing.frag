@@ -5,13 +5,13 @@
 #define M_RAD 57.2958
 
 // Кол-во семплов на 1 пиксель
-#define SAMPLES 128
+#define SAMPLES 32
 // Кол-во отскоков луча
-#define PATH_LENGHT 3
+#define PATH_LENGHT 6
 // Типы материалов
 #define MATERIAL_LIGHT 0
 #define MATERIAL_LAMBERT 1
-#define MATERIAL_METALLIC 2
+#define MATERIAL_METAL 2
 #define MATERIAL_DIELECTRIC 3
 // Типы примитивов
 #define PRIMITIVE_SPHERE 1
@@ -115,7 +115,7 @@ in VS_OUT
 
 /**
  * Используется для генерции псевдослучайного значения от 0 до 1
- * \param seed Семя рандомизации (значение изменябщееся для каждого пикселя и,если необходимо, для каждого кадра)
+ * \param seed Семя рандомизации
  * \return Значение от 0 до 1
  */
 float hash1(inout float seed) {
@@ -123,8 +123,21 @@ float hash1(inout float seed) {
 }
 
 /**
+ * Используется для генерции псевдослучайного значения от min до max
+ * \param min Нижняя граница случайных значений
+ * \param max Верхняя граница случайных значений
+ * \param seed Семя рандомизации
+ * \return Значение от 0 до 1
+ */
+float hash1range(float min, float max, inout float seed) {
+    float delta = max - min;
+    float scaled = hash1(seed) * delta;
+    return min + scaled;
+}
+
+/**
  * Используется для генерции пары псевдослучайных значений от 0 до 1
- * \param seed Семя рандомизации (значение изменябщееся для каждого пикселя и,если необходимо, для каждого кадра)
+ * \param seed Семя рандомизации
  * \return 2D-вектор со значениями компонентов от 0 до 1
  */
 vec2 hash2(inout float seed) {
@@ -133,7 +146,7 @@ vec2 hash2(inout float seed) {
 
 /**
  * Используется для генерции тройки псевдослучайных значений от 0 до 1
- * \param seed Семя рандомизации (значение изменябщееся для каждого пикселя и,если необходимо, для каждого кадра)
+ * \param seed Семя рандомизации
  * \return 3D-вектор со значениями компонентов от 0 до 1
  */
 vec3 hash3(inout float seed) {
@@ -194,10 +207,12 @@ vec3 rayDirCam(float fov, float aspectRatio, vec2 fragCoord, vec2 pixelBias)
 /**
  * Получить случайное направление в пределах ориентированной полусферы
  * \param dir Направление ориентированности полсферы
+ * \param maxAngle Максимальный угол разброса
+ * \param cosWeighted Направления будут чаще выбираться к полюсу, согласно косинусу
  * \param seed "Семя" рандомизации
  * \return Вектор
  */
-vec3 rayDirRndHemisphere(vec3 dir, inout float seed)
+vec3 rayDirRndHemisphere(vec3 dir, float maxAngle, bool cosWeighted, inout float seed)
 {
     // Вектор перпендикулярный вектору направления
     vec3 b = normalize(cross(dir, dir + vec3(0.01f)));
@@ -209,9 +224,10 @@ vec3 rayDirRndHemisphere(vec3 dir, inout float seed)
     // При помощи данной выосты получаем случайный угол theta, это позволяет избежать загустения выборки у полюса
 
     // Fi - угол вектора вращяющегося вокруг направления dir [0:360]
-    // Theta - угол между итоговым вектором и направлением dir (полярный угол) [0:90]
     float fi = hash1(seed) * 360.0f / M_RAD;
-    float theta = acos(hash1(seed));
+    // Theta - угол между итоговым вектором и направлением dir (полярный угол) [0:90]
+    float h = hash1range(cos(maxAngle/M_RAD),1.0f, seed);
+    float theta = acos(cosWeighted ? sqrt(h) : h);
 
     // Вектор описывающий круг вокруг направления dir
     vec3 d = b * cos(fi) + c * sin(fi);
@@ -220,7 +236,7 @@ vec3 rayDirRndHemisphere(vec3 dir, inout float seed)
 }
 
 //-----------------------------------------------------
-// Математика
+// Вспомогательная математика
 //-----------------------------------------------------
 
 /**
@@ -243,6 +259,37 @@ mat3 rotate(vec3 angles)
         vec3(cos(ar.z)*sin(ar.y)* sin(ar.x)-sin(ar.z)*cos(ar.x), sin(ar.z)*sin(ar.y)*sin(ar.x)+cos(ar.z)*cos(ar.x), cos(ar.y)*sin(ar.x)),
         vec3(cos(ar.z)*sin(ar.y)*cos(ar.x)+sin(ar.z)*sin(ar.x), sin(ar.z)*sin(ar.y)*cos(ar.x)-cos(ar.z)*sin(ar.x), cos(ar.y)*cos(ar.x))
     );
+}
+
+/**
+ * Может ли поверхность преломить луч
+ * При определенных углах закон Синелиуса для преломления не выполняется, луч должен быть отражен
+ * \param rayDirection Направление луча
+ * \param normal Нормаль
+ * \param refractRatio Соотношение преломления (обратный индекс преломления)
+ * \return Возможно ли преломление
+ */
+bool canRefract(vec3 rayDirection, vec3 normal, float refractRatio)
+{
+    float cosTheta = min(dot(-rayDirection, normal), 1.0);
+    float sinTheta = sqrt(1.0f - cosTheta*cosTheta);
+    return refractRatio * sinTheta <= 1.0f;
+}
+
+/**
+ * Аппроксимация Шлика для преломляющих поверхностей
+ * Часть лучей должна быть отражена. Данная функция дает приблизительную вероятность того, должен ли быть луч отражен 
+ * \param rayDirection Направление луча
+ * \param normal Нормаль
+ * \param refractRatio Соотношение преломления (обратный индекс преломления)
+ * \return Возможно ли преломление
+ */
+float reflectance(vec3 rayDirection, vec3 normal, float refractRatio)
+{
+    float cosTheta = min(dot(-rayDirection, normal), 1.0);
+    float r0 = (1-refractRatio) / (1+refractRatio);
+    r0 = r0*r0;
+    return r0 + (1 - r0)*pow((1 - cosTheta),5.0f);
 }
 
 //-----------------------------------------------------
@@ -398,8 +445,8 @@ bool intersectPrimitive(Ray ray, Primitive primitive, float tMin, float tMax, in
 
     // Для того чтобы трансформировать объект (положение, ориентацию) нужно применить обратную трансформацию к лучу
     // T.е сдвигается не сам объект, а луч относительно объекта.
-    mat3 inverseRotation = length(primitive.orientation) > 0.0f ? rotate(-primitive.orientation) : mat3(1.0f);
-    mat3 rotation = length(primitive.orientation) > 0.0f ? rotate(primitive.orientation) : mat3(1.0f);
+    mat3 inverseRotation = rotate(-primitive.orientation);
+    mat3 rotation = rotate(primitive.orientation);
 
     // Трансформированный луч (в пространстве примитива)
     Ray rayTransformed = Ray(inverseRotation * (ray.origin - primitive.position),inverseRotation * ray.direction);
@@ -478,22 +525,30 @@ bool intersectScene(Ray ray, float tMin, float tMax, inout RayHitInfo hitInfo)
 
     // Массив примитивов
     Primitive[] primitives = Primitive[](
-        Primitive(PRIMITIVE_PLANE, vec3(0.0f,5.0f,0.0f), vec3(0.0f),0.0f,vec3(0.0f,-1.0f,0.0f),vec2(0.0f),vec3(0.0f),
-            MATERIAL_LAMBERT,vec3(1.0f),0.0f,0.0f),
-        Primitive(PRIMITIVE_PLANE, vec3(0.0f,-5.0f,0.0f), vec3(0.0f),0.0f,vec3(0.0f,1.0f,0.0f),vec2(0.0f),vec3(0.0f),
-            MATERIAL_LAMBERT,vec3(1.0f),0.0f,0.0f),
-        Primitive(PRIMITIVE_PLANE, vec3(0.0f,0.0f,-5.0f), vec3(0.0f),0.0f,vec3(0.0f,0.0f,1.0f),vec2(0.0f),vec3(0.0f),
-            MATERIAL_LAMBERT,vec3(1.0f),0.0f,0.0f),
-        Primitive(PRIMITIVE_PLANE, vec3(-5.0f,0.0f,0.0f), vec3(0.0f),0.0f,vec3(1.0f,0.0f,0.0f),vec2(0.0f),vec3(0.0f),
-            MATERIAL_LAMBERT,vec3(0.65f, 0.05f, 0.05f),0.0f,0.0f),
-        Primitive(PRIMITIVE_PLANE, vec3(5.0f,0.0f,0.0f), vec3(0.0f),0.0f,vec3(-1.0f,0.0f,0.0f),vec2(0.0f),vec3(0.0f),
-            MATERIAL_LAMBERT,vec3(0.12f, 0.45f, 0.15f),0.0f,0.0f),
-        Primitive(PRIMITIVE_RECT,vec3(0.0f,4.95f,0.0f),vec3(90.0f,0.0f,0.0f),0.0f,vec3(0.0f),vec2(3.0f,3.0f),vec3(0.0f),
-            MATERIAL_LIGHT,vec3(15.0f),0.0f,0.0f)
+        // Верхняя стена
+        Primitive(PRIMITIVE_PLANE, vec3(0.0f,5.0f,0.0f), vec3(0.0f),0.0f,vec3(0.0f,-1.0f,0.0f), vec2(0.0f), vec3(0.0f), MATERIAL_LAMBERT,vec3(1.0f), 0.0f, 0.0f),
+        // Нижняя стена
+        Primitive(PRIMITIVE_PLANE, vec3(0.0f,-5.0f,0.0f), vec3(0.0f),0.0f,vec3(0.0f,1.0f,0.0f),vec2(0.0f),vec3(0.0f), MATERIAL_LAMBERT, vec3(1.0f), 0.0f, 0.0f),
+        // Передняя стена
+        Primitive(PRIMITIVE_PLANE, vec3(0.0f,0.0f,-5.0f), vec3(0.0f),0.0f,vec3(0.0f,0.0f,1.0f),vec2(0.0f),vec3(0.0f), MATERIAL_LAMBERT, vec3(1.0f), 0.0f, 0.0f),
+        // Левая стена (красный)
+        Primitive(PRIMITIVE_PLANE, vec3(-5.0f,0.0f,0.0f), vec3(0.0f),0.0f,vec3(1.0f,0.0f,0.0f),vec2(0.0f),vec3(0.0f), MATERIAL_LAMBERT, vec3(0.65f, 0.05f, 0.05f), 0.0f, 0.0f),
+        // Правая стена (зеленый)
+        Primitive(PRIMITIVE_PLANE, vec3(5.0f,0.0f,0.0f), vec3(0.0f),0.0f,vec3(-1.0f,0.0f,0.0f),vec2(0.0f),vec3(0.0f), MATERIAL_LAMBERT, vec3(0.12f, 0.45f, 0.15f), 0.0f, 0.0f),
+
+        // Зеркальная сфера
+        Primitive(PRIMITIVE_SPHERE, vec3(0.0f,-2.95f,-1.0), vec3(0.0f), 2.0f, vec3(0.0f), vec2(0.0f), vec3(0.0f), MATERIAL_METAL, vec3(0.8f,0.8f,0.8f), 0.2f, 0.0f),
+        // Диффузная сфера
+        Primitive(PRIMITIVE_SPHERE, vec3(-2.0f,-3.95f,2.5), vec3(0.0f), 1.0f, vec3(0.0f), vec2(0.0f), vec3(0.0f), MATERIAL_LAMBERT, vec3(0.1f,0.2f,0.5f), 0.0f, 0.0f),
+        // Стеклянная сфера
+        Primitive(PRIMITIVE_SPHERE, vec3(2.5f,-3.45f,3.0f), vec3(0.0f), 1.5f, vec3(0.0f), vec2(0.0f), vec3(0.0f), MATERIAL_DIELECTRIC, vec3(1.0f), 0.0f, 1.5f),
+
+        // Источник света
+        Primitive(PRIMITIVE_RECT,vec3(0.0f,4.95f,0.0f),vec3(90.0f,0.0f,0.0f),0.0f,vec3(0.0f),vec2(3.0f,3.0f),vec3(0.0f), MATERIAL_LIGHT,vec3(15.0f),0.0f,0.0f)
     );
 
     // Пройтись по примитивам
-    for(int i = 0; i < 6; i++)
+    for(int i = 0; i < 9; i++)
     {
         // Если пересечение с ближайшим примитивом засчитано
         if(intersectPrimitive(ray,primitives[i],tMin,tMax,t,hitIngoResult) && t < tClosest){
@@ -546,16 +601,63 @@ vec3 traceEyePath(in Ray ray, inout float seed)
             break;
         }
 
-        // Исходим из того что цикл не был оборван
-        // Нужно обновить начало и направление луча
-        ray.origin = hitInfo.point;
-        ray.direction = rayDirRndHemisphere(hitInfo.normal, seed);
+        // Следущий код исполняется исходя из того что цикл не был оборван
+        // Необходимо описать поведение (разброс) лучей при столкновении с разными материалами 
+        switch(hitInfo.materialType)
+        {
+            // Диффузный
+            case MATERIAL_LAMBERT:
+            {
+                // Луч из точки удара случайно переотражается в полной полусфере (90 градусов)
+                ray.origin = hitInfo.point;
+                ray.direction = rayDirRndHemisphere(hitInfo.normal, 90.0f, true, seed);
+                // Поврехность передает свой цвет лучу
+                light *= hitInfo.albedo;
+                // Свет тускнеет по закону косинуса (только для равномерного распределения, для взвешанного по косинусу это необходимо отключить)
+                //light *= 2.0 * dot(ray.direction, hitInfo.normal);
 
-        // В результате переотражений поверхности передают свой цвет лучу
-        light *= hitInfo.albedo;
+                break;
+            }
+            // Металл
+            case MATERIAL_METAL:
+            {
+                // Луч из точки удара переотражается по отраженному вдоль нормали вектору
+                // Разброс (максимальный угол) зависит от шероховатости
+                vec3 reflectedDir = reflect(ray.direction,hitInfo.normal);
+                ray.origin = hitInfo.point;
+                ray.direction = rayDirRndHemisphere(reflectedDir, 60.0f * hitInfo.roughness, true, seed);
+                // Поврехность передает свой цвет лучу
+                light *= hitInfo.albedo;
+                // Свет тускнеет по закону косинуса (только для равномерного распределения, для взвешанного по косинусу это необходимо отключить)
+                //light *= 2.0 * dot(ray.direction, hitInfo.normal);
 
-        // Свет тускнеет по закону косинуса (только для равного распределения по полусфере)
-        light *= 2.0 * dot(ray.direction, hitInfo.normal);
+                break;
+            }
+            // Диэлектрик
+            case MATERIAL_DIELECTRIC:
+            {
+                // Коэффициент преломления (меняется в зависимости от того, о лицевую ли грань ударяется луч)
+                float refractRatio = hitInfo.isFrontFace ? (1.0f /  hitInfo.refraction) : hitInfo.refraction;
+
+                // Луч должен быть с некоторой вероятностью отражен от прозрачной поверности (апприксимация Шлика)
+                bool sholudReflect = hitInfo.isFrontFace && reflectance(ray.direction, hitInfo.normal, refractRatio) > hash1(seed);
+
+                // Преломление не всегда возможно
+                // При определенных углах луч может только отразиться
+                if(!canRefract(ray.direction,hitInfo.normal,refractRatio) || sholudReflect)
+                {
+                    ray.origin = hitInfo.point;
+                    ray.direction = reflect(ray.direction,hitInfo.normal);
+                }
+                else
+                {
+                    ray.origin = hitInfo.point;
+                    ray.direction = refract(ray.direction,hitInfo.normal,refractRatio);
+                }
+
+                break;
+            }
+        }
     }
 
     // Вернуть итоговый цвет
@@ -593,6 +695,7 @@ void main()
     // Усреднить по кол-ву семплов на пиксель
     resultColor /= SAMPLES;
 
+    // Простая гамма-коррекция
     //resultColor = pow(clamp(resultColor,0.0,1.0),vec3(0.45));
     resultColor = sqrt(clamp(resultColor,0.0,1.0));
 
