@@ -12,6 +12,9 @@
 #include <gl/GeometryBuffer.hpp>
 #include <tools/Camera.hpp>
 #include <tools/Timer.hpp>
+#include <tools/Primitive.hpp>
+
+#define MAX_PRIMITIVES 10
 
 /** W I N A P I  S T U F F **/
 
@@ -93,9 +96,13 @@ std::string LoadStringFromFile(const std::string &path);
 /** O P E N G L **/
 
 /// Геометрия квадрата для отрисовки на весь экран
-gl::GeometryBuffer* g_geometryQuad_;
+gl::GeometryBuffer* g_geometryQuad;
 /// Основная шейдерная программа
-gl::ShaderProgram* g_shaderMain_;
+gl::ShaderProgram* g_shaderMain;
+/// UBO буфер содежрайщий общие параметры
+GLuint g_uboCommonSettings;
+/// UBO буфер содержащий примитивы сцены
+GLuint g_uboPrimitives;
 
 /**
  * \brief Установка статуса вертикальной синхронизации
@@ -111,11 +118,22 @@ void SetVSyncStatus(bool status);
 void InitOpenGl(unsigned screenWidth, unsigned screenHeight);
 
 /**
+ * \brief Уничтожение компонентов рендеринга
+ */
+void ClearOpenGl();
+
+/**
  * \brief Рендеринг полноэкранного квадрата
  * \param screenWidth Ширина экрана
  * \param screenHeight Высота жкрана
  */
 void RenderQuad(unsigned screenWidth, unsigned screenHeight);
+
+/**
+ * \brief Обновить кол-во примитивов в UBO буфере
+ * \param totalPrimitives Общее кол-во примитивов
+ */
+void updatePrimitiveCount(GLuint totalPrimitives);
 
 /** M A I N **/
 
@@ -123,6 +141,8 @@ void RenderQuad(unsigned screenWidth, unsigned screenHeight);
 tools::Camera* g_camera = nullptr;
 /// Объект таймера
 tools::Timer* g_timer = nullptr;
+/// Объекты сцены
+std::vector<tools::Primitive*> g_primitives = {};
 
 /**
  * \brief Точка входа
@@ -206,6 +226,32 @@ int main(int argc, char* argv[])
         // Установка камеры
         g_camera = new tools::Camera({0.0f,0.0f,10.0f},{0.0f,0.0f,0.0f});
 
+        // Параметры материалов
+        using P = tools::Primitive;
+        P::MaterialInfo lambertWhite = {P::eLambert, glm::vec3(1.0f)};
+        P::MaterialInfo lambertRed = {P::eLambert, glm::vec3(0.65f, 0.05f, 0.05f)};
+        P::MaterialInfo lambertGreen = {P::eLambert, glm::vec3(0.12f, 0.45f, 0.15f)};
+        P::MaterialInfo lambertBlue = {P::eLambert, glm::vec3(0.1f,0.2f,0.5f)};
+        P::MaterialInfo metal = {P::eMetal, glm::vec3(0.8f),0.2f};
+        P::MaterialInfo glass = {P::eDielectric, glm::vec3(1.0f),0.0f,1.5f};
+        P::MaterialInfo light = {P::eLightEmitter, glm::vec3(15.0f)};
+
+        // Примитивы
+        g_primitives.push_back(new tools::PrimitivePlane({0.0f,5.0f,0.0f},{0.0f,-1.0f,0.0f},lambertWhite));
+        g_primitives.push_back(new tools::PrimitivePlane({0.0f,-5.0f,0.0f},{0.0f,1.0f,0.0f},lambertWhite));
+        g_primitives.push_back(new tools::PrimitivePlane({0.0f,0.0f,-5.0f},{0.0f,0.0f,1.0f},lambertWhite));
+        g_primitives.push_back(new tools::PrimitivePlane({-5.0f,0.0f,0.0f},{1.0f,0.0f,0.0f},lambertRed));
+        g_primitives.push_back(new tools::PrimitivePlane({5.0f,0.0f,0.0f},{-1.0f,0.0f,0.0f},lambertGreen));
+        g_primitives.push_back(new tools::PrimitiveSphere({0.0f,-2.95f,-1.0},2.0f,metal));
+        g_primitives.push_back(new tools::PrimitiveSphere({-2.0f,-3.95f,2.5},1.0f,lambertBlue));
+        g_primitives.push_back(new tools::PrimitiveSphere({2.5f,-3.45f,3.0f},1.5f,glass));
+        g_primitives.push_back(new tools::PrimitiveRectangle({0.0f,4.95f,0.0f},{90.0f,0.0f,0.0f},{3.0f,3.0f},light));
+
+        // Обновить массив примитивов в UBO буфере
+        for(unsigned int i = 0; i < g_primitives.size(); i++) g_primitives[i]->writeToUniformBuffer(g_uboPrimitives,i);
+        // Обновить кол-во примитивов в UBO буфере
+        updatePrimitiveCount(g_primitives.size());
+
         /** MAIN LOOP **/
 
         // Таймер основного цикла (для выяснения временной дельты и FPS)
@@ -249,10 +295,17 @@ int main(int argc, char* argv[])
         std::cout << ex.what() << std::endl;
     }
 
+    // Уничтожить вспомогательные объекты
+    delete g_timer;
+    delete g_camera;
+    for(tools::Primitive* primitive : g_primitives) delete primitive;
+
     // Уничтожение контекста OpenGL
     wglMakeCurrent(nullptr, nullptr);
     wglDeleteContext(g_hglrc);
 
+    // Очистить OpenGL компоненты
+    ClearOpenGl();
     // Уничтожение окна
     DestroyWindow(g_hwnd);
     // Вырегистрировать класс окна
@@ -506,7 +559,7 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
         auto fsSource = LoadStringFromFile("../Shaders/01_Basic/path_tracing.frag");
 
         // Собрать шейдереную программу
-        g_shaderMain_ = new gl::ShaderProgram({
+        g_shaderMain = new gl::ShaderProgram({
             {GL_VERTEX_SHADER, vsSource.c_str()},
             {GL_FRAGMENT_SHADER, fsSource.c_str()}
         });
@@ -515,17 +568,29 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
     /// Ресурсы по умолчанию
     {
         // Геометрия квадрата на весь экран
-        g_geometryQuad_ = new gl::GeometryBuffer({
+        g_geometryQuad = new gl::GeometryBuffer({
             { { 1.0f,1.0f,0.0f },{ 1.0f,1.0f,1.0f },{ 1.0f,1.0f }, {0.0f,0.0f,1.0f} },
             { { 1.0f,-1.0f,0.0f },{ 1.0f,1.0f,1.0f },{ 1.0f,0.0f }, {0.0f,0.0f,1.0f} },
             { { -1.0f,-1.0f,0.0f },{ 1.0f,1.0f,1.0f },{ 0.0f,0.0f }, {0.0f,0.0f,1.0f} },
             { { -1.0f,1.0f,0.0f },{ 1.0f,1.0f,1.0f },{ 0.0f,1.0f }, {0.0f,0.0f,1.0f} },
-            },{ 0,1,2, 0,2,3 });
+            }, { 0,1,2, 0,2,3 });
     }
 
     /// Инициализация UBO-буферов
     {
-        //TODO: произвести инициализацию UBO
+        // Создать UBO для общих параметров
+        glGenBuffers(1, &g_uboCommonSettings);
+        glBindBuffer(GL_UNIFORM_BUFFER, g_uboCommonSettings);
+        glBufferData(GL_UNIFORM_BUFFER, 16, nullptr, GL_STREAM_DRAW);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 0, g_uboCommonSettings);
+        glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
+        // Создать UBO для массива примитивов
+        glGenBuffers(1, &g_uboPrimitives);
+        glBindBuffer(GL_UNIFORM_BUFFER, g_uboPrimitives);
+        glBufferData(GL_UNIFORM_BUFFER, PRIMITIVE_SIZE * MAX_PRIMITIVES, nullptr, GL_STREAM_DRAW);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 1, g_uboPrimitives);
+        glBindBuffer(GL_UNIFORM_BUFFER, 0);
     }
 
     /// Инициализация кадровых буферов
@@ -551,6 +616,22 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
 }
 
 /**
+ * \brief Уничтожение компонентов рендеринга
+ */
+void ClearOpenGl()
+{
+    // Уничтожение UBO (Uniform Buffer)
+    GLuint ubo[2] = {g_uboCommonSettings, g_uboPrimitives};
+    glDeleteBuffers(2, ubo);
+
+    // Уничтожить ресурсы по умолчанию
+    delete g_geometryQuad;
+
+    // Уничтожить шейдеры
+    delete g_shaderMain;
+}
+
+/**
  * \brief Рендеринг полноэкранного квадрата
  * \param screenWidth Ширина экрана
  * \param screenHeight Высота жкрана
@@ -561,7 +642,7 @@ void RenderQuad(unsigned screenWidth, unsigned screenHeight)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     // Использовать шейдер
-    glUseProgram(g_shaderMain_->getId());
+    glUseProgram(g_shaderMain->getId());
 
     // Включить запись в цветовой буфер
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -575,20 +656,32 @@ void RenderQuad(unsigned screenWidth, unsigned screenHeight)
     glClear(GL_COLOR_BUFFER_BIT);
 
     // Передать FOV
-    glUniform1f(g_shaderMain_->getUniformLocations()->camFov, 90.0f);
+    glUniform1f(g_shaderMain->getUniformLocations()->camFov, 90.0f);
     // Передать размеры экрана
-    glUniform2fv(g_shaderMain_->getUniformLocations()->screenSize, 1, glm::value_ptr(glm::vec2(static_cast<float>(screenWidth),static_cast<float>(screenHeight))));
+    glUniform2fv(g_shaderMain->getUniformLocations()->screenSize, 1, glm::value_ptr(glm::vec2(static_cast<float>(screenWidth), static_cast<float>(screenHeight))));
     // Передать положение камеры
-    glUniform3fv(g_shaderMain_->getUniformLocations()->camPosition, 1, glm::value_ptr(g_camera->getPosition()));
+    glUniform3fv(g_shaderMain->getUniformLocations()->camPosition, 1, glm::value_ptr(g_camera->getPosition()));
     // Передать матрицу вида
-    glUniformMatrix4fv(g_shaderMain_->getUniformLocations()->viewMatrix, 1, GL_FALSE, glm::value_ptr(g_camera->getViewMatrix()));
+    glUniformMatrix4fv(g_shaderMain->getUniformLocations()->viewMatrix, 1, GL_FALSE, glm::value_ptr(g_camera->getViewMatrix()));
     // Передать матрицу модели камеры
-    glUniformMatrix4fv(g_shaderMain_->getUniformLocations()->camModelMatrix, 1, GL_FALSE, glm::value_ptr(g_camera->getModelMatrix()));
+    glUniformMatrix4fv(g_shaderMain->getUniformLocations()->camModelMatrix, 1, GL_FALSE, glm::value_ptr(g_camera->getModelMatrix()));
     // Передать текущее время выполнения программы
-    glUniform1f(g_shaderMain_->getUniformLocations()->time, g_timer->getCurrentTime());
+    glUniform1f(g_shaderMain->getUniformLocations()->time, g_timer->getCurrentTime());
 
     // Привязать геометрию и нарисовать ее
-    glBindVertexArray(g_geometryQuad_->getVaoId());
-    glDrawElements(GL_TRIANGLES, g_geometryQuad_->getIndexCount(), GL_UNSIGNED_INT, nullptr);
+    glBindVertexArray(g_geometryQuad->getVaoId());
+    glDrawElements(GL_TRIANGLES, g_geometryQuad->getIndexCount(), GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
+}
+
+/**
+ * \brief Обновить кол-во примитивов в UBO буфере
+ * \param totalPrimitives Общее кол-во примитивов
+ */
+void updatePrimitiveCount(GLuint totalPrimitives)
+{
+    // Запись в UBO
+    glBindBuffer(GL_UNIFORM_BUFFER, g_uboCommonSettings);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, 4, &totalPrimitives);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }

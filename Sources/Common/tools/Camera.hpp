@@ -14,7 +14,7 @@ namespace tools
          * Оси координат
          * Используется при указании порядка во время поворотом на углы Эйлера
          */
-        enum Axis { AXIS_X, AXIS_Y, AXIS_Z };
+        enum Axis { eAxisX, eAxisY, eAxisZ };
 
     private:
         /// Матрица модели (локальные -> глобальные)

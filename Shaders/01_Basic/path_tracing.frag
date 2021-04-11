@@ -1,18 +1,24 @@
-#version 330 core
+#version 420 core
 
 // Математические константы
 #define M_PI 3.141592
 #define M_RAD 57.2958
 
+// Максимальное кол-во примитивов на сцене
+#define MAX_PRIMITIVES 10
+
 // Кол-во семплов на 1 пиксель
-#define SAMPLES 32
+#define SAMPLES 16
+
 // Кол-во отскоков луча
 #define PATH_LENGHT 6
+
 // Типы материалов
 #define MATERIAL_LIGHT 0
 #define MATERIAL_LAMBERT 1
 #define MATERIAL_METAL 2
 #define MATERIAL_DIELECTRIC 3
+
 // Типы примитивов
 #define PRIMITIVE_SPHERE 1
 #define PRIMITIVE_PLANE 2
@@ -99,6 +105,18 @@ uniform float iCamFov;
 uniform mat4 iView;
 uniform mat4 iCamModel;
 uniform float iTime;
+
+/*Uniform-буферы*/
+
+layout (std140, binding = 0) uniform commonSettings
+{
+    uint iTotalPrimitives;
+};
+
+layout (std140, binding = 1) uniform primitives
+{
+    Primitive iPrimitives[MAX_PRIMITIVES];
+};
 
 /*Вход*/
 
@@ -523,35 +541,11 @@ bool intersectScene(Ray ray, float tMin, float tMax, inout RayHitInfo hitInfo)
     // Информация о пересечении
     RayHitInfo hitIngoResult;
 
-    // Массив примитивов
-    Primitive[] primitives = Primitive[](
-        // Верхняя стена
-        Primitive(PRIMITIVE_PLANE, vec3(0.0f,5.0f,0.0f), vec3(0.0f),0.0f,vec3(0.0f,-1.0f,0.0f), vec2(0.0f), vec3(0.0f), MATERIAL_LAMBERT,vec3(1.0f), 0.0f, 0.0f),
-        // Нижняя стена
-        Primitive(PRIMITIVE_PLANE, vec3(0.0f,-5.0f,0.0f), vec3(0.0f),0.0f,vec3(0.0f,1.0f,0.0f),vec2(0.0f),vec3(0.0f), MATERIAL_LAMBERT, vec3(1.0f), 0.0f, 0.0f),
-        // Передняя стена
-        Primitive(PRIMITIVE_PLANE, vec3(0.0f,0.0f,-5.0f), vec3(0.0f),0.0f,vec3(0.0f,0.0f,1.0f),vec2(0.0f),vec3(0.0f), MATERIAL_LAMBERT, vec3(1.0f), 0.0f, 0.0f),
-        // Левая стена (красный)
-        Primitive(PRIMITIVE_PLANE, vec3(-5.0f,0.0f,0.0f), vec3(0.0f),0.0f,vec3(1.0f,0.0f,0.0f),vec2(0.0f),vec3(0.0f), MATERIAL_LAMBERT, vec3(0.65f, 0.05f, 0.05f), 0.0f, 0.0f),
-        // Правая стена (зеленый)
-        Primitive(PRIMITIVE_PLANE, vec3(5.0f,0.0f,0.0f), vec3(0.0f),0.0f,vec3(-1.0f,0.0f,0.0f),vec2(0.0f),vec3(0.0f), MATERIAL_LAMBERT, vec3(0.12f, 0.45f, 0.15f), 0.0f, 0.0f),
-
-        // Зеркальная сфера
-        Primitive(PRIMITIVE_SPHERE, vec3(0.0f,-2.95f,-1.0), vec3(0.0f), 2.0f, vec3(0.0f), vec2(0.0f), vec3(0.0f), MATERIAL_METAL, vec3(0.8f,0.8f,0.8f), 0.2f, 0.0f),
-        // Диффузная сфера
-        Primitive(PRIMITIVE_SPHERE, vec3(-2.0f,-3.95f,2.5), vec3(0.0f), 1.0f, vec3(0.0f), vec2(0.0f), vec3(0.0f), MATERIAL_LAMBERT, vec3(0.1f,0.2f,0.5f), 0.0f, 0.0f),
-        // Стеклянная сфера
-        Primitive(PRIMITIVE_SPHERE, vec3(2.5f,-3.45f,3.0f), vec3(0.0f), 1.5f, vec3(0.0f), vec2(0.0f), vec3(0.0f), MATERIAL_DIELECTRIC, vec3(1.0f), 0.0f, 1.5f),
-
-        // Источник света
-        Primitive(PRIMITIVE_RECT,vec3(0.0f,4.95f,0.0f),vec3(90.0f,0.0f,0.0f),0.0f,vec3(0.0f),vec2(3.0f,3.0f),vec3(0.0f), MATERIAL_LIGHT,vec3(15.0f),0.0f,0.0f)
-    );
-
-    // Пройтись по примитивам
-    for(int i = 0; i < 9; i++)
+    // Пройтись по примитивам в UBO буфере
+    for(int i = 0; i < iTotalPrimitives; i++)
     {
         // Если пересечение с ближайшим примитивом засчитано
-        if(intersectPrimitive(ray,primitives[i],tMin,tMax,t,hitIngoResult) && t < tClosest){
+        if(intersectPrimitive(ray,iPrimitives[i],tMin,tMax,t,hitIngoResult) && t < tClosest){
             hit = true;
             tClosest = t;
 
