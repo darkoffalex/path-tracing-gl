@@ -5,27 +5,14 @@
 
 namespace gl
 {
+    template <class T>
     class ShaderProgram final
     {
-        /**
-         * \brief Набор идентификаторов положений uniform-переменных в шейдерной программе
-         * \details Данная структура может меняться в зависимости от потребностей, шейдеров и конвейера в целом
-         */
-        struct UniformLocations
-        {
-            GLuint camFov = 0;
-            GLuint camPosition = 0;
-            GLuint viewMatrix = 0;
-            GLuint camModelMatrix = 0;
-            GLuint screenSize = 0;
-            GLuint time = 0;
-        };
-
     private:
         /// Хендл ресурса OpenGL
         GLuint id_;
         /// Идентификаторы положений uniform-переменных
-        UniformLocations uniformLocations_;
+        T uniformLocations_;
 
         /**
          * Компиляция исходного кода шейдера
@@ -67,13 +54,14 @@ namespace gl
          */
         void initUniformLocations()
         {
+            // Если не проинициализирована шейдерная программа
             if(this->id_ == 0) return;
-            this->uniformLocations_.screenSize = glGetUniformLocation(id_, "iScreenSize");
-            this->uniformLocations_.camFov = glGetUniformLocation(id_, "iCamFov");
-            this->uniformLocations_.camPosition = glGetUniformLocation(id_, "iCamPosition");
-            this->uniformLocations_.viewMatrix = glGetUniformLocation(id_, "iView");
-            this->uniformLocations_.camModelMatrix = glGetUniformLocation(id_,"iCamModel");
-            this->uniformLocations_.time = glGetUniformLocation(id_,"iTime");
+
+            // Считаем что в структуре T задано поле bindings представляющее из себя ассоциативный массив
+            // Ассоциативный массив должен быть вида "указатель на поле структуры -> название переменной в шейдере"
+            for(const auto& entry : this->uniformLocations_.bindings){
+                *entry.first = glGetUniformLocation(id_, entry.second.c_str());
+            }
         }
 
     public:
@@ -128,7 +116,7 @@ namespace gl
          * Конструктор ресурса
          * \param shaderSources Ассоциативный массив (тип => исходный код шейдера)
          */
-        explicit ShaderProgram(const std::unordered_map<GLuint, std::string>& shaderSources)
+        explicit ShaderProgram(const std::unordered_map<GLuint, std::string>& shaderSources):id_(0)
         {
             // Зарегистрировать шейдерную программу
             this->id_ = glCreateProgram();
@@ -200,7 +188,7 @@ namespace gl
          * Получить набор локаций uniform-переменных
          * @return Указатель на структуру с набором локаций
          */
-        [[nodiscard]] const UniformLocations* getUniformLocations() const
+        [[nodiscard]] const T* getUniformLocations() const
         {
             return &uniformLocations_;
         }

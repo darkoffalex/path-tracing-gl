@@ -95,10 +95,36 @@ std::string LoadStringFromFile(const std::string &path);
 
 /** O P E N G L **/
 
+/**
+ * \brief Набор идентификаторов положений uniform-переменных в шейдерной программе
+ * \details Данная структура может меняться в зависимости от потребностей текущей реализации, шейдеров и конвейера в целом
+ */
+struct UniformLocations
+{
+    // Идентификаторы локаций
+    GLuint camFov = 0;
+    GLuint camPosition = 0;
+    GLuint viewMatrix = 0;
+    GLuint camModelMatrix = 0;
+    GLuint screenSize = 0;
+    GLuint time = 0;
+
+    // Ассоциативный массив связи идентификаторов и uniform-переменных в шейдере
+    // Используется при инициализации шейдерной программы и получении идентификаторов локаций
+    std::unordered_map<GLuint*, std::string> bindings = {
+            {&camFov,"iCamFov"},
+            {&camPosition,"iCamPosition"},
+            {&viewMatrix,"iView"},
+            {&camModelMatrix,"iCamModel"},
+            {&screenSize,"iScreenSize"},
+            {&time,"iTime"}
+    };
+};
+
 /// Геометрия квадрата для отрисовки на весь экран
 gl::GeometryBuffer* g_geometryQuad;
 /// Основная шейдерная программа
-gl::ShaderProgram* g_shaderMain;
+gl::ShaderProgram<UniformLocations>* g_shaderMain;
 /// UBO буфер содежрайщий общие параметры
 GLuint g_uboCommonSettings;
 /// UBO буфер содержащий примитивы сцены
@@ -311,7 +337,7 @@ int main(int argc, char* argv[])
     // Вырегистрировать класс окна
     UnregisterClass(g_strClassName, g_hInstance);
 
-    return 1;
+    return 0;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -559,7 +585,7 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
         auto fsSource = LoadStringFromFile("../Shaders/01_Basic/path_tracing.frag");
 
         // Собрать шейдереную программу
-        g_shaderMain = new gl::ShaderProgram({
+        g_shaderMain = new gl::ShaderProgram<UniformLocations>({
             {GL_VERTEX_SHADER, vsSource.c_str()},
             {GL_FRAGMENT_SHADER, fsSource.c_str()}
         });
