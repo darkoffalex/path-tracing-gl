@@ -10,6 +10,8 @@
 
 #include <gl/ShaderProgram.hpp>
 #include <gl/GeometryBuffer.hpp>
+#include <gl/FrameBuffer.hpp>
+
 #include <tools/Camera.hpp>
 #include <tools/Timer.hpp>
 #include <tools/Primitive.hpp>
@@ -96,10 +98,9 @@ std::string LoadStringFromFile(const std::string &path);
 /** O P E N G L **/
 
 /**
- * \brief Набор идентификаторов положений uniform-переменных в шейдерной программе
- * \details Данная структура может меняться в зависимости от потребностей текущей реализации, шейдеров и конвейера в целом
+ * \brief Набор идентификаторов положений uniform-переменных в шейдерной программе трассировки путей
  */
-struct UniformLocations
+struct UniformLocationsPt
 {
     // Идентификаторы локаций
     GLuint camFov = 0;
@@ -121,14 +122,33 @@ struct UniformLocations
     };
 };
 
+/**
+ * \brief Набор идентификаторов положений uniform-переменных в шейдерной программе пост-процессинга
+ */
+struct UniformLocationsPost
+{
+    // Идентификаторы локаций
+    GLuint screenTexture = 0;
+
+    // Ассоциативный массив связи идентификаторов и uniform-переменных в шейдере
+    // Используется при инициализации шейдерной программы и получении идентификаторов локаций
+    std::unordered_map<GLuint*, std::string> bindings = {
+            {&screenTexture,"iScreenTexture"}
+    };
+};
+
 /// Геометрия квадрата для отрисовки на весь экран
-gl::GeometryBuffer* g_geometryQuad;
-/// Основная шейдерная программа
-gl::ShaderProgram<UniformLocations>* g_shaderMain;
+gl::GeometryBuffer* g_geometryQuad = nullptr;
+/// Шейдерная программа для трассировки путей
+gl::ShaderProgram<UniformLocationsPt>* g_shaderPathTracing = nullptr;
+/// Шейдерная программа для пост-процессинга
+gl::ShaderProgram<UniformLocationsPost>* g_shaderProgramPost = nullptr;
+/// Основной кадровый буфер
+gl::FrameBuffer* g_frameBuffer = nullptr;
 /// UBO буфер содежрайщий общие параметры
-GLuint g_uboCommonSettings;
+GLuint g_uboCommonSettings = 0;
 /// UBO буфер содержащий примитивы сцены
-GLuint g_uboPrimitives;
+GLuint g_uboPrimitives = 0;
 
 /**
  * \brief Установка статуса вертикальной синхронизации
@@ -149,11 +169,18 @@ void InitOpenGl(unsigned screenWidth, unsigned screenHeight);
 void ClearOpenGl();
 
 /**
- * \brief Рендеринг полноэкранного квадрата
- * \param screenWidth Ширина экрана
- * \param screenHeight Высота жкрана
+ * \brief Рендеринг полноэкранного квадрата в первичный кадровый буфер
+ * \details Полученный кадровый буфер будет использован проходом постпроцессинга
  */
-void RenderQuad(unsigned screenWidth, unsigned screenHeight);
+void RenderPrimaryQuad();
+
+/**
+ * \brief Отображение на основном кадровоб буфере (буфере по умолчанию) результата их предыдущего прохода
+ * \details В процессе рендеринга может быть произведена пост-обработка
+ * \param width Ширина кадрового буфера по умолчанию
+ * \param height Высота кадрового буфера по умолчанию
+ */
+void RenderFinalQuad(GLuint width, GLuint height);
 
 /**
  * \brief Обновить кол-во примитивов в UBO буфере
@@ -305,12 +332,19 @@ int main(int argc, char* argv[])
                 }
             }
 
+            /// u p d a t e
+
             // Обновление сцены
             g_camera->updatePlacement(g_timer->getDelta());
 
-            // Рендеринг
+            /// r e n d e r i n g
+
+            // Получение размеров экрана
             GetClientRect(g_hwnd, &clientRect);
-            RenderQuad(static_cast<unsigned>(clientRect.right),static_cast<unsigned>(clientRect.bottom));
+            // Основной проход - трассировка
+            RenderPrimaryQuad();
+            // Пост процессинг
+            RenderFinalQuad(clientRect.right,clientRect.bottom);
 
             // Смена буферов окна
             SwapBuffers(g_hdc);
@@ -581,13 +615,20 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
     /// Шейдеры
     {
         // Получить исходники шейдеров
-        auto vsSource = LoadStringFromFile("../Shaders/01_Basic/path_tracing.vert");
-        auto fsSource = LoadStringFromFile("../Shaders/01_Basic/path_tracing.frag");
+        auto vsSource = LoadStringFromFile("../Shaders/01_Basic/common.vert");
+        auto fsPtSource = LoadStringFromFile("../Shaders/01_Basic/path_tracing.frag");
+        auto fsPostSource = LoadStringFromFile("../Shaders/01_Basic/post_process.frag");
 
-        // Собрать шейдереную программу
-        g_shaderMain = new gl::ShaderProgram<UniformLocations>({
+        // Собрать шейдереную программу для трассировки путей
+        g_shaderPathTracing = new gl::ShaderProgram<UniformLocationsPt>({
             {GL_VERTEX_SHADER, vsSource.c_str()},
-            {GL_FRAGMENT_SHADER, fsSource.c_str()}
+            {GL_FRAGMENT_SHADER, fsPtSource.c_str()}
+        });
+
+        // Собрать шейдерную программу для пост-процесса
+        g_shaderProgramPost = new gl::ShaderProgram<UniformLocationsPost>({
+            {GL_VERTEX_SHADER, vsSource.c_str()},
+            {GL_FRAGMENT_SHADER, fsPostSource.c_str()}
         });
     }
 
@@ -621,7 +662,16 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
 
     /// Инициализация кадровых буферов
     {
-        //TODO: произвести инициализацию кадровых буферов
+        // Создать основной кадровый буфер экрана
+        // Данный кадровый буфер содержит только одно вложение цвета, поскольку нет нужды во вложении глубины
+        // Цветовое вложение данного буфера используется этапом пост-процессинга
+        g_frameBuffer = new gl::FrameBuffer(screenWidth,screenHeight);
+        g_frameBuffer->addTextureAttachment(GL_RGBA32F,GL_RGBA,GL_COLOR_ATTACHMENT0,false);
+
+        // Подготовить буфер
+        if(!g_frameBuffer->prepareBuffer({GL_COLOR_ATTACHMENT0})){
+            throw std::runtime_error("OpenGL framebuffer initialization failed");
+        }
     }
 
     /// Основные OpenGL настройки по умолчанию
@@ -638,6 +688,8 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
         glDepthFunc(GL_LEQUAL);
         // Тест ножниц по умолчнию включен
         glEnable(GL_SCISSOR_TEST);
+        // Отключть тест глубины
+        glDisable(GL_DEPTH_TEST);
     }
 }
 
@@ -646,6 +698,9 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
  */
 void ClearOpenGl()
 {
+    // Уничтожение кадровых буферов
+    delete g_frameBuffer;
+
     // Уничтожение UBO (Uniform Buffer)
     GLuint ubo[2] = {g_uboCommonSettings, g_uboPrimitives};
     glDeleteBuffers(2, ubo);
@@ -654,45 +709,83 @@ void ClearOpenGl()
     delete g_geometryQuad;
 
     // Уничтожить шейдеры
-    delete g_shaderMain;
+    delete g_shaderPathTracing;
 }
 
 /**
- * \brief Рендеринг полноэкранного квадрата
- * \param screenWidth Ширина экрана
- * \param screenHeight Высота жкрана
+ * \brief Рендеринг полноэкранного квадрата в первичный кадровый буфер
+ * \details Полученный кадровый буфер будет использован проходом постпроцессинга
  */
-void RenderQuad(unsigned screenWidth, unsigned screenHeight)
+void RenderPrimaryQuad()
 {
-    // Привязываемся ко фрейм-буфферу (временно используем основной)
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // Привязываемся к первичному фрейм-буфферу
+    glBindFramebuffer(GL_FRAMEBUFFER, g_frameBuffer->getId());
 
-    // Использовать шейдер
-    glUseProgram(g_shaderMain->getId());
+    // Использовать основной шейдер (шейдер трассировки)
+    glUseProgram(g_shaderPathTracing->getId());
 
     // Включить запись в цветовой буфер
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
     // Указать область кадра доступную для отрисовки
-    glScissor(0, 0, screenWidth, screenHeight);
-    glViewport(0, 0, screenWidth, screenHeight);
+    glScissor(0, 0, g_frameBuffer->getWidth(), g_frameBuffer->getHeight());
+    glViewport(0, 0, g_frameBuffer->getWidth(), g_frameBuffer->getHeight());
 
     // Очистка буфера
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
     // Передать FOV
-    glUniform1f(g_shaderMain->getUniformLocations()->camFov, 90.0f);
+    glUniform1f(g_shaderPathTracing->getUniformLocations()->camFov, 90.0f);
     // Передать размеры экрана
-    glUniform2fv(g_shaderMain->getUniformLocations()->screenSize, 1, glm::value_ptr(glm::vec2(static_cast<float>(screenWidth), static_cast<float>(screenHeight))));
+    glUniform2fv(g_shaderPathTracing->getUniformLocations()->screenSize, 1, glm::value_ptr(glm::vec2(static_cast<float>(g_frameBuffer->getWidth()), static_cast<float>(g_frameBuffer->getHeight()))));
     // Передать положение камеры
-    glUniform3fv(g_shaderMain->getUniformLocations()->camPosition, 1, glm::value_ptr(g_camera->getPosition()));
+    glUniform3fv(g_shaderPathTracing->getUniformLocations()->camPosition, 1, glm::value_ptr(g_camera->getPosition()));
     // Передать матрицу вида
-    glUniformMatrix4fv(g_shaderMain->getUniformLocations()->viewMatrix, 1, GL_FALSE, glm::value_ptr(g_camera->getViewMatrix()));
+    glUniformMatrix4fv(g_shaderPathTracing->getUniformLocations()->viewMatrix, 1, GL_FALSE, glm::value_ptr(g_camera->getViewMatrix()));
     // Передать матрицу модели камеры
-    glUniformMatrix4fv(g_shaderMain->getUniformLocations()->camModelMatrix, 1, GL_FALSE, glm::value_ptr(g_camera->getModelMatrix()));
+    glUniformMatrix4fv(g_shaderPathTracing->getUniformLocations()->camModelMatrix, 1, GL_FALSE, glm::value_ptr(g_camera->getModelMatrix()));
     // Передать текущее время выполнения программы
-    glUniform1f(g_shaderMain->getUniformLocations()->time, g_timer->getCurrentTime());
+    glUniform1f(g_shaderPathTracing->getUniformLocations()->time, g_timer->getCurrentTime());
+
+    // Привязать геометрию и нарисовать ее
+    glBindVertexArray(g_geometryQuad->getVaoId());
+    glDrawElements(GL_TRIANGLES, g_geometryQuad->getIndexCount(), GL_UNSIGNED_INT, nullptr);
+    glBindVertexArray(0);
+}
+
+/**
+ * \brief Отображение на основном кадровоб буфере (буфере по умолчанию) результата их предыдущего прохода
+ * \details В процессе рендеринга может быть произведена пост-обработка
+ * \param width Ширина кадрового буфера по умолчанию
+ * \param height Высота кадрового буфера по умолчанию
+ */
+void RenderFinalQuad(GLuint width, GLuint height)
+{
+    // Привязываемся к основному фрейм-буферу
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // Использовать шейдер пост-обработки
+    glUseProgram(g_shaderProgramPost->getId());
+
+    // Включить запись в цветовой буфер
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    // Отключить аддитивное смешивание
+    glDisable(GL_BLEND);
+
+    // Указать область кадра доступную для отрисовки
+    glScissor(0, 0, width, height);
+    glViewport(0, 0, width, height);
+
+    // Очистка буфера
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Передать цветовое вложение основного фрейм-буфера в качестве текстуры
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D,g_frameBuffer->getTextureAttachments()[0]);
+    glUniform1i(g_shaderProgramPost->getUniformLocations()->screenTexture,0);
 
     // Привязать геометрию и нарисовать ее
     glBindVertexArray(g_geometryQuad->getVaoId());
