@@ -77,7 +77,7 @@ inline POINT CursorPos(HWND hwnd){
  * \param camSpeed Скорость камеры (м/с)
  * \param mouseSensitivity Чувствительность мыши
  */
-void Controls(float camSpeed = 2.5f, float mouseSensitivity = 0.2f);
+void Controls(float camSpeed = 4.0f, float mouseSensitivity = 0.2f);
 
 /** U T I L S **/
 
@@ -243,7 +243,7 @@ int main(int argc, char* argv[])
                 g_strWindowCaption,
                 WS_OVERLAPPEDWINDOW,
                 0, 0,
-                800, 480,
+                1000, 1000,
                 nullptr,
                 nullptr,
                 g_hInstance,

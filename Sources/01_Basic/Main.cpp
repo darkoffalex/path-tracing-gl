@@ -241,7 +241,7 @@ int main(int argc, char* argv[])
                 g_strWindowCaption,
                 WS_OVERLAPPEDWINDOW,
                 0, 0,
-                800, 480,
+                1000, 1000,
                 nullptr,
                 nullptr,
                 g_hInstance,

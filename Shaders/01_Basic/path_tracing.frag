@@ -14,7 +14,7 @@
 #define MAX_PRIMITIVES 10
 
 // Кол-во семплов на 1 пиксель
-#define SAMPLES 16
+#define SAMPLES 10
 
 // Кол-во отскоков луча
 #define PATH_LENGHT 6
