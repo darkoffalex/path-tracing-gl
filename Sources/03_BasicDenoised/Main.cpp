@@ -11,10 +11,12 @@
 #include <gl/ShaderProgram.hpp>
 #include <gl/GeometryBuffer.hpp>
 #include <gl/FrameBuffer.hpp>
-
+#include <gl/Texture2D.hpp>
 #include <tools/Camera.hpp>
 #include <tools/Timer.hpp>
 #include <tools/Primitive.hpp>
+
+#include <OpenImageDenoise/oidn.h>
 
 #define MAX_PRIMITIVES 10
 
@@ -31,7 +33,7 @@ HGLRC g_hglrc = nullptr;
 /// Наименование класса
 const char* g_strClassName = "MainWindowClass";
 /// Заголовок окна
-const char* g_strWindowCaption = "02 - Progressive tracing example";
+const char* g_strWindowCaption = "03 - Basic denoised example";
 
 /// Макросы для проверки состояния кнопок
 #define KEY_DOWN(vk_code) ((static_cast<uint16_t>(GetAsyncKeyState(vk_code)) & 0x8000u) ? true : false)
@@ -77,7 +79,7 @@ inline POINT CursorPos(HWND hwnd){
  * \param camSpeed Скорость камеры (м/с)
  * \param mouseSensitivity Чувствительность мыши
  */
-void Controls(float camSpeed = 4.0f, float mouseSensitivity = 0.2f);
+void Controls(float camSpeed = 1.5f, float mouseSensitivity = 0.2f);
 
 /** U T I L S **/
 
@@ -179,8 +181,9 @@ void RenderPrimaryQuad();
  * \details В процессе рендеринга может быть произведена пост-обработка
  * \param width Ширина кадрового буфера по умолчанию
  * \param height Высота кадрового буфера по умолчанию
+ * \param useDenoisedResult Использовать результат денойзера
  */
-void RenderFinalQuad(GLuint width, GLuint height);
+void RenderFinalQuad(GLuint width, GLuint height, bool useDenoisedResult = true);
 
 /**
  * \brief Обновить кол-во примитивов в UBO буфере
@@ -188,7 +191,41 @@ void RenderFinalQuad(GLuint width, GLuint height);
  */
 void UpdatePrimitiveCount(GLuint totalPrimitives);
 
-void clearPrimaryFramebuffer();
+/** D E N O I S E R **/
+
+/// Денойзер
+OIDNDevice g_denoiserDevice = nullptr;
+/// Фильтр для денойзера
+OIDNFilter g_denoiserFilter = nullptr;
+/// Буфер изображения для денойзинга - цвет
+OIDNBuffer g_denoiserBufferColor = nullptr;
+/// Буфер изобажения для дейнойзинга - альбедо первого пересечения
+OIDNBuffer g_denoiserBufferAlbedo = nullptr;
+/// Буфер изображения для денойзинга - альбедо первого пересечения
+OIDNBuffer g_denoiserBufferNormal = nullptr;
+/// Буфер итогового изображения
+OIDNBuffer g_denoiserBufferResult = nullptr;
+
+/// Текстура итогового изображения для показа
+gl::Texture2D* g_denoisedFrameTexture = nullptr;
+
+/**
+ * \brief Инициализация компонентов деноизинга
+ * \param width Ширина кадра
+ * \param height Высота кадра
+ */
+void InitDenoiser(unsigned width, unsigned height);
+
+/**
+ * \brief Уничтожение компонентов денойзинга
+ */
+void ClearDenoiser();
+
+/**
+ * \brief Произвести фильтрацию (денойзинг) кадра
+ * \param frameBufferPtr Кадровый буфер (должен содержать все необходимые вложения)
+ */
+void DenoiseFrame(gl::FrameBuffer* frameBufferPtr);
 
 /** M A I N **/
 
@@ -243,7 +280,7 @@ int main(int argc, char* argv[])
                 g_strWindowCaption,
                 WS_OVERLAPPEDWINDOW,
                 0, 0,
-                1000, 1000,
+                640, 480,
                 nullptr,
                 nullptr,
                 g_hInstance,
@@ -272,6 +309,9 @@ int main(int argc, char* argv[])
 
         // Инициализация OpenGL
         InitOpenGl(static_cast<unsigned>(clientRect.right),static_cast<unsigned>(clientRect.bottom));
+
+        // Инициализация денойзера
+        InitDenoiser(static_cast<unsigned>(clientRect.right),static_cast<unsigned>(clientRect.bottom));
 
         // Вертикальная синхронизация
         SetVSyncStatus(false);
@@ -305,7 +345,7 @@ int main(int argc, char* argv[])
         // Обновить массив примитивов в UBO буфере
         for(unsigned int i = 0; i < g_primitives.size(); i++) g_primitives[i]->writeToUniformBuffer(g_uboPrimitives,i);
         // Обновить кол-во примитивов в UBO буфере
-        UpdatePrimitiveCount(g_primitives.size());
+        UpdatePrimitiveCount(static_cast<GLuint>(g_primitives.size()));
 
         /** MAIN LOOP **/
 
@@ -345,8 +385,10 @@ int main(int argc, char* argv[])
             GetClientRect(g_hwnd, &clientRect);
             // Основной проход - трассировка
             RenderPrimaryQuad();
+            // Денойзинг
+            DenoiseFrame(g_frameBuffer);
             // Пост процессинг
-            RenderFinalQuad(clientRect.right,clientRect.bottom);
+            RenderFinalQuad(clientRect.right,clientRect.bottom, true);
 
             // Смена буферов окна
             SwapBuffers(g_hdc);
@@ -366,6 +408,8 @@ int main(int argc, char* argv[])
     wglMakeCurrent(nullptr, nullptr);
     wglDeleteContext(g_hglrc);
 
+    // Очистить денойзер
+    ClearDenoiser();
     // Очистить OpenGL компоненты
     ClearOpenGl();
     // Уничтожение окна
@@ -505,14 +549,8 @@ void Controls(float camSpeed, float mouseSensitivity)
         orientation.x += static_cast<float>(deltaMousePos.y) * mouseSensitivity;
         orientation.y += static_cast<float>(deltaMousePos.x) * mouseSensitivity;
         g_camera->setOrientation(orientation);
-
-        // Обнуление кадрового буфера в случае изменения координат мыши
-        if(deltaMousePos.x != 0 || deltaMousePos.y != 0) clearPrimaryFramebuffer();
     }
     lastMousePos = currentMousePos;
-
-    // Обнуление кадрового буфера в случае движения
-    if(glm::length2(camVelocityRel) > 0.0f || glm::length2(camVelocityAbs) > 0.0f) clearPrimaryFramebuffer();
 
     // Установить векторы движения камеры
     if(g_camera != nullptr){
@@ -623,9 +661,9 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
     /// Шейдеры
     {
         // Получить исходники шейдеров
-        auto vsSource = LoadStringFromFile("../Shaders/02_Progressive/common.vert");
-        auto fsPtSource = LoadStringFromFile("../Shaders/02_Progressive/path_tracing.frag");
-        auto fsPostSource = LoadStringFromFile("../Shaders/02_Progressive/post_process.frag");
+        auto vsSource = LoadStringFromFile("../Shaders/03_BasicDenoised/common.vert");
+        auto fsPtSource = LoadStringFromFile("../Shaders/03_BasicDenoised/path_tracing.frag");
+        auto fsPostSource = LoadStringFromFile("../Shaders/03_BasicDenoised/post_process.frag");
 
         // Собрать шейдереную программу для трассировки путей
         g_shaderPathTracing = new gl::ShaderProgram<UniformLocationsPt>({
@@ -674,10 +712,12 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
         // Данный кадровый буфер содержит только одно вложение цвета, поскольку нет нужды во вложении глубины
         // Цветовое вложение данного буфера используется этапом пост-процессинга
         g_frameBuffer = new gl::FrameBuffer(screenWidth,screenHeight);
-        g_frameBuffer->addTextureAttachment(GL_RGBA32F,GL_RGBA,GL_COLOR_ATTACHMENT0,false);
+        g_frameBuffer->addTextureAttachment(GL_RGB32F,GL_RGB,GL_COLOR_ATTACHMENT0,false);
+        g_frameBuffer->addTextureAttachment(GL_RGB32F,GL_RGB,GL_COLOR_ATTACHMENT1, false);
+        g_frameBuffer->addTextureAttachment(GL_RGB32F,GL_RGB,GL_COLOR_ATTACHMENT2, false);
 
         // Подготовить буфер
-        if(!g_frameBuffer->prepareBuffer({GL_COLOR_ATTACHMENT0})){
+        if(!g_frameBuffer->prepareBuffer({GL_COLOR_ATTACHMENT0,GL_COLOR_ATTACHMENT1,GL_COLOR_ATTACHMENT2})){
             throw std::runtime_error("OpenGL framebuffer initialization failed");
         }
     }
@@ -735,15 +775,13 @@ void RenderPrimaryQuad()
     // Включить запись в цветовой буфер
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-    // Аддитивный блендинг
-    // Цвет аккумулируется в буфере, на этапе пост-обработки делится на кол-во кадров
-    glEnable(GL_BLEND);
-    glBlendEquation(GL_FUNC_ADD);
-    glBlendFuncSeparate(GL_ONE,GL_ONE,GL_ONE,GL_ONE);
-
     // Указать область кадра доступную для отрисовки
     glScissor(0, 0, g_frameBuffer->getWidth(), g_frameBuffer->getHeight());
     glViewport(0, 0, g_frameBuffer->getWidth(), g_frameBuffer->getHeight());
+
+    // Очистка буфера
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
 
     // Передать FOV
     glUniform1f(g_shaderPathTracing->getUniformLocations()->camFov, 90.0f);
@@ -769,8 +807,9 @@ void RenderPrimaryQuad()
  * \details В процессе рендеринга может быть произведена пост-обработка
  * \param width Ширина кадрового буфера по умолчанию
  * \param height Высота кадрового буфера по умолчанию
+ * \param useDenoisedResult Использовать результат денойзера
  */
-void RenderFinalQuad(GLuint width, GLuint height)
+void RenderFinalQuad(GLuint width, GLuint height, bool useDenoisedResult)
 {
     // Привязываемся к основному фрейм-буферу
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -794,7 +833,7 @@ void RenderFinalQuad(GLuint width, GLuint height)
 
     // Передать цветовое вложение основного фрейм-буфера в качестве текстуры
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D,g_frameBuffer->getTextureAttachments()[0]);
+    glBindTexture(GL_TEXTURE_2D, useDenoisedResult ? g_denoisedFrameTexture->getId() : g_frameBuffer->getTextureAttachments()[0]);
     glUniform1i(g_shaderProgramPost->getUniformLocations()->screenTexture,0);
 
     // Привязать геометрию и нарисовать ее
@@ -815,21 +854,102 @@ void UpdatePrimitiveCount(GLuint totalPrimitives)
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
+/** D E N O I S E R **/
+
 /**
- * \brief Очистка основного кадрового буфера
- * \details В случае с изменением сцены (положением камеры или объектов) необходимо очистить кадровый буфер, поскольку
- * буфер накапливает информацию о цвете сцены в каждом кадре, и при изменении сцены она перестает быть актуальной
+ * \brief Инициализация компонентов деноизинга
+ * \param width Ширина кадра
+ * \param height Высота кадра
  */
-void clearPrimaryFramebuffer()
+void InitDenoiser(unsigned int width, unsigned int height)
 {
-    // Привязываемся к первичному фрейм-буфферу
-    glBindFramebuffer(GL_FRAMEBUFFER, g_frameBuffer->getId());
+    // Инициализация устройства для денойзинга (предпочтение отдается GPU)
+    g_denoiserDevice = oidnNewDevice(OIDN_DEVICE_TYPE_DEFAULT);
+    oidnSetDevice1i(g_denoiserDevice,"numThreads",16);
+    oidnSetDevice1b(g_denoiserDevice, "setAffinity",false);
+    oidnCommitDevice(g_denoiserDevice);
 
-    // Указать область кадра доступную для отрисовки
-    glScissor(0, 0, g_frameBuffer->getWidth(), g_frameBuffer->getHeight());
-    glViewport(0, 0, g_frameBuffer->getWidth(), g_frameBuffer->getHeight());
+    // Вычислить размер буферов кадра
+    // Исходим из того что формат кадра это FLOAT3, 32 бита (4 байта) на компонент цвета (RGB - 3 компонента)
+    unsigned frameSizeBytes = 4 * 3 * width * height;
 
-    // Очистка буфера
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    // Создать буферы
+    g_denoiserBufferColor = oidnNewBuffer(g_denoiserDevice,frameSizeBytes);
+    g_denoiserBufferAlbedo = oidnNewBuffer(g_denoiserDevice,frameSizeBytes);
+    g_denoiserBufferNormal = oidnNewBuffer(g_denoiserDevice,frameSizeBytes);
+    g_denoiserBufferResult = oidnNewBuffer(g_denoiserDevice,frameSizeBytes);
+
+    // Создать фильтр
+    g_denoiserFilter = oidnNewFilter(g_denoiserDevice,"RT");
+    oidnSetFilterImage(g_denoiserFilter,"color",g_denoiserBufferColor,OIDN_FORMAT_FLOAT3,width,height,0,0,0);
+    oidnSetFilterImage(g_denoiserFilter,"albedo",g_denoiserBufferAlbedo,OIDN_FORMAT_FLOAT3,width,height,0,0,0);
+    oidnSetFilterImage(g_denoiserFilter,"normal",g_denoiserBufferNormal,OIDN_FORMAT_FLOAT3,width,height,0,0,0);
+    oidnSetFilterImage(g_denoiserFilter,"output",g_denoiserBufferResult,OIDN_FORMAT_FLOAT3,width,height,0,0,0);
+    oidnSetFilter1b(g_denoiserFilter,"hdr",false);
+    oidnCommitFilter(g_denoiserFilter);
+
+    // Создать текстуру итогового кадра для показа
+    g_denoisedFrameTexture = new gl::Texture2D(nullptr,width,height,gl::Texture2D::ColorSpace::eRgb,gl::Texture2D::eBilinear,false,GL_FLOAT);
+}
+
+/**
+ * \brief Уничтожение компонентов денойзинга
+ */
+void ClearDenoiser()
+{
+    // Очистка текстуры итогового кадра
+    delete g_denoisedFrameTexture;
+
+    // Очистка буферов
+    oidnReleaseBuffer(g_denoiserBufferColor);
+    oidnReleaseBuffer(g_denoiserBufferAlbedo);
+    oidnReleaseBuffer(g_denoiserBufferNormal);
+    oidnReleaseBuffer(g_denoiserBufferResult);
+
+    // Очистка фильтра
+    oidnReleaseFilter(g_denoiserFilter);
+
+    // Очистка устройства
+    oidnReleaseDevice(g_denoiserDevice);
+}
+
+/**
+ * \brief Произвести фильтрацию (денойзинг) кадра
+ * \param frameBufferPtr Кадровый буфер (должен содержать все необходимые вложения)
+ */
+void DenoiseFrame(gl::FrameBuffer *frameBufferPtr)
+{
+    // Вычислить размер буферов кадра
+    // Исходим из того что формат кадра это FLOAT3, 32 бита (4 байта) на компонент цвета (RGB - 3 компонента)
+    unsigned frameSizeBytes = 4 * 3 * frameBufferPtr->getWidth() * frameBufferPtr->getHeight();
+
+    // Разметить буферы изображений для входных данных
+    void* colorBufferPtr = oidnMapBuffer(g_denoiserBufferColor,OIDN_ACCESS_READ_WRITE,0,frameSizeBytes);
+    void* normalBufferPtr = oidnMapBuffer(g_denoiserBufferNormal,OIDN_ACCESS_READ_WRITE,0,frameSizeBytes);
+    void* albedoBufferPtr = oidnMapBuffer(g_denoiserBufferAlbedo,OIDN_ACCESS_READ_WRITE,0,frameSizeBytes);
+
+    // Работаем с кадровым буфером
+    glBindFramebuffer(GL_FRAMEBUFFER, frameBufferPtr->getId());
+    // Скопировать данные из вложений кадрового буфера OpenGL в буферы денойзинга
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glReadPixels(0,0,frameBufferPtr->getWidth(),frameBufferPtr->getHeight(),GL_RGB,GL_FLOAT,colorBufferPtr);
+    glReadBuffer(GL_COLOR_ATTACHMENT1);
+    glReadPixels(0,0,frameBufferPtr->getWidth(),frameBufferPtr->getHeight(),GL_RGB,GL_FLOAT,normalBufferPtr);
+    glReadBuffer(GL_COLOR_ATTACHMENT2);
+    glReadPixels(0,0,frameBufferPtr->getWidth(),frameBufferPtr->getHeight(),GL_RGB,GL_FLOAT,albedoBufferPtr);
+
+    // Убрать разметку со входных буферов
+    oidnUnmapBuffer(g_denoiserBufferColor, colorBufferPtr);
+    oidnUnmapBuffer(g_denoiserBufferNormal, normalBufferPtr);
+    oidnUnmapBuffer(g_denoiserBufferAlbedo, albedoBufferPtr);
+
+    // Зайденойзить всё к хуям
+    oidnExecuteFilter(g_denoiserFilter);
+
+    // Разметить буфер результата
+    void* resultBufferPtr = oidnMapBuffer(g_denoiserBufferResult,OIDN_ACCESS_READ_WRITE,0,frameSizeBytes);
+    // Скопировать данные в текстуру
+    g_denoisedFrameTexture->setTextureData(resultBufferPtr,GL_RGB32F,GL_RGB,GL_FLOAT);
+    // Убрать разметку
+    oidnUnmapBuffer(g_denoiserBufferResult, resultBufferPtr);
 }

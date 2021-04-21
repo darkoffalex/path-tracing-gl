@@ -186,7 +186,7 @@ void RenderFinalQuad(GLuint width, GLuint height);
  * \brief Обновить кол-во примитивов в UBO буфере
  * \param totalPrimitives Общее кол-во примитивов
  */
-void updatePrimitiveCount(GLuint totalPrimitives);
+void UpdatePrimitiveCount(GLuint totalPrimitives);
 
 /** M A I N **/
 
@@ -303,7 +303,7 @@ int main(int argc, char* argv[])
         // Обновить массив примитивов в UBO буфере
         for(unsigned int i = 0; i < g_primitives.size(); i++) g_primitives[i]->writeToUniformBuffer(g_uboPrimitives,i);
         // Обновить кол-во примитивов в UBO буфере
-        updatePrimitiveCount(g_primitives.size());
+        UpdatePrimitiveCount(g_primitives.size());
 
         /** MAIN LOOP **/
 
@@ -797,7 +797,7 @@ void RenderFinalQuad(GLuint width, GLuint height)
  * \brief Обновить кол-во примитивов в UBO буфере
  * \param totalPrimitives Общее кол-во примитивов
  */
-void updatePrimitiveCount(GLuint totalPrimitives)
+void UpdatePrimitiveCount(GLuint totalPrimitives)
 {
     // Запись в UBO
     glBindBuffer(GL_UNIFORM_BUFFER, g_uboCommonSettings);

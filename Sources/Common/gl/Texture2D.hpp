@@ -162,7 +162,7 @@ namespace gl
 
 
             // Устанавливаем данные текстуры (загрузка в текстурную память)
-            glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, this->width_, this->height_, 0, format, type, textureData);
+            if(textureData) glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, this->width_, this->height_, 0, format, type, textureData);
 
             // Генерация мип-уровней (если нужно)
             if (this->mip_) {
@@ -179,6 +179,30 @@ namespace gl
         ~Texture2D()
         {
             if (id_) glDeleteTextures(1, &id_);
+        }
+
+        /**
+         * \brief Установить текстурные данные
+         * \param textureData Указатель на массив данных
+         * \param internalFormat Внутренний формат
+         * \param format Формат выборки
+         * \param type Тип данных
+         */
+        void setTextureData(void* textureData, GLuint internalFormat, GLuint format, GLuint type = GL_UNSIGNED_BYTE) const
+        {
+            // Привязываемся к текстуре по идентификатору (работаем с текстурой)
+            glBindTexture(GL_TEXTURE_2D, this->id_);
+
+            // Устанавливаем данные текстуры (загрузка в текстурную память)
+            glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, this->width_, this->height_, 0, format, type, textureData);
+
+            // Генерация мип-уровней (если нужно)
+            if (this->mip_) {
+                glGenerateMipmap(GL_TEXTURE_2D);
+            }
+
+            // Отвязка от текстуры
+            glBindTexture(GL_TEXTURE_2D, 0);
         }
 
         /**

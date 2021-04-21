@@ -68,8 +68,8 @@ namespace gl
             if (&other == this) return *this;
 
             // Удалить ресурсы которыми владеет текущий объект
-            if (!textureAttachments_.empty()) glDeleteTextures(textureAttachments_.size(), textureAttachments_.data());
-            if (!renderBufferAttachments_.empty()) glDeleteRenderbuffers(renderBufferAttachments_.size(), renderBufferAttachments_.data());
+            if (!textureAttachments_.empty()) glDeleteTextures(static_cast<GLsizei>(textureAttachments_.size()), textureAttachments_.data());
+            if (!renderBufferAttachments_.empty()) glDeleteRenderbuffers(static_cast<GLsizei>(renderBufferAttachments_.size()), renderBufferAttachments_.data());
             if (id_ != 0) glDeleteFramebuffers(1, &id_);
 
             // Очистить дескрипторы
@@ -109,8 +109,8 @@ namespace gl
         ~FrameBuffer()
         {
             // Удалить ресурсы которыми владеет текущий объект
-            if (!textureAttachments_.empty()) glDeleteTextures(textureAttachments_.size(), textureAttachments_.data());
-            if (!renderBufferAttachments_.empty()) glDeleteRenderbuffers(renderBufferAttachments_.size(), renderBufferAttachments_.data());
+            if (!textureAttachments_.empty()) glDeleteTextures(static_cast<GLsizei>(textureAttachments_.size()), textureAttachments_.data());
+            if (!renderBufferAttachments_.empty()) glDeleteRenderbuffers(static_cast<GLsizei>(renderBufferAttachments_.size()), renderBufferAttachments_.data());
             if (id_ != 0) glDeleteFramebuffers(1, &id_);
         }
 
@@ -223,7 +223,7 @@ namespace gl
             }
 
             // Указать какие вложения будут использованы для рендеринга
-            if(!drawToAttachments.empty()) glDrawBuffers(drawToAttachments.size(), drawToAttachments.data());
+            if(!drawToAttachments.empty()) glDrawBuffers(static_cast<GLsizei>(drawToAttachments.size()), drawToAttachments.data());
 
             // Если фрейм-буфер не готов
             if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
