@@ -16,7 +16,7 @@
 #include <tools/Timer.hpp>
 #include <tools/Primitive.hpp>
 
-#include <OpenImageDenoise/oidn.h>
+#include <RadeonImageFilter/RadeonImageFilters.h>
 
 #define MAX_PRIMITIVES 10
 
@@ -193,19 +193,21 @@ void UpdatePrimitiveCount(GLuint totalPrimitives);
 
 /** D E N O I S E R **/
 
-/// Денойзер
-OIDNDevice g_denoiserDevice = nullptr;
-/// Фильтр для денойзера
-OIDNFilter g_denoiserFilter = nullptr;
-/// Буфер изображения для денойзинга - цвет
-OIDNBuffer g_denoiserBufferColor = nullptr;
-/// Буфер изобажения для дейнойзинга - альбедо первого пересечения
-OIDNBuffer g_denoiserBufferAlbedo = nullptr;
-/// Буфер изображения для денойзинга - альбедо первого пересечения
-OIDNBuffer g_denoiserBufferNormal = nullptr;
-/// Буфер итогового изображения
-OIDNBuffer g_denoiserBufferResult = nullptr;
-
+/// Статус операций денойзинга
+rif_int g_denoiserStatus = RIF_SUCCESS;
+/// Контекст денойзера
+rif_context g_denoiserContext = nullptr;
+/// Очередь операций денойзера
+rif_command_queue g_denoiserQueue = nullptr;
+/// Фильтр AI денойзера
+rif_image_filter g_denoiserFilterDenoise = nullptr;
+/// Входные изображения денойзера
+rif_image g_denoiserInputColorImage = nullptr;
+rif_image g_denoiserInputNormalImage = nullptr;
+rif_image g_denoiserInputAlbedoImage = nullptr;
+rif_image g_denoiserInputDepthImage = nullptr;
+/// Результат денойзинга
+rif_image g_denoiserOutputImage = nullptr;
 /// Текстура итогового изображения для показа
 gl::Texture2D* g_denoisedFrameTexture = nullptr;
 
@@ -226,6 +228,8 @@ void ClearDenoiser();
  * \param frameBufferPtr Кадровый буфер (должен содержать все необходимые вложения)
  */
 void DenoiseFrame(gl::FrameBuffer* frameBufferPtr);
+
+void PostDenoise(void* data);
 
 /** M A I N **/
 
@@ -386,9 +390,9 @@ int main(int argc, char* argv[])
             // Основной проход - трассировка
             RenderPrimaryQuad();
             // Денойзинг
-            DenoiseFrame(g_frameBuffer);
+            //DenoiseFrame(g_frameBuffer);
             // Пост процессинг
-            RenderFinalQuad(clientRect.right,clientRect.bottom, true);
+            RenderFinalQuad(clientRect.right,clientRect.bottom, false);
 
             // Смена буферов окна
             SwapBuffers(g_hdc);
@@ -715,9 +719,10 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
         g_frameBuffer->addTextureAttachment(GL_RGB32F,GL_RGB,GL_COLOR_ATTACHMENT0,false);
         g_frameBuffer->addTextureAttachment(GL_RGB32F,GL_RGB,GL_COLOR_ATTACHMENT1, false);
         g_frameBuffer->addTextureAttachment(GL_RGB32F,GL_RGB,GL_COLOR_ATTACHMENT2, false);
+        g_frameBuffer->addTextureAttachment(GL_R32F,GL_RED,GL_COLOR_ATTACHMENT3, false);
 
         // Подготовить буфер
-        if(!g_frameBuffer->prepareBuffer({GL_COLOR_ATTACHMENT0,GL_COLOR_ATTACHMENT1,GL_COLOR_ATTACHMENT2})){
+        if(!g_frameBuffer->prepareBuffer({GL_COLOR_ATTACHMENT0,GL_COLOR_ATTACHMENT1,GL_COLOR_ATTACHMENT2,GL_COLOR_ATTACHMENT3})){
             throw std::runtime_error("OpenGL framebuffer initialization failed");
         }
     }
@@ -863,30 +868,52 @@ void UpdatePrimitiveCount(GLuint totalPrimitives)
  */
 void InitDenoiser(unsigned int width, unsigned int height)
 {
-    // Инициализация устройства для денойзинга (предпочтение отдается GPU)
-    g_denoiserDevice = oidnNewDevice(OIDN_DEVICE_TYPE_DEFAULT);
-    oidnSetDevice1i(g_denoiserDevice,"numThreads",16);
-    oidnSetDevice1b(g_denoiserDevice, "setAffinity",false);
-    oidnCommitDevice(g_denoiserDevice);
+    // Размер изображений в байтах
+    //unsigned frameSizeBytes = 4 * 3 * width * height;
 
-    // Вычислить размер буферов кадра
-    // Исходим из того что формат кадра это FLOAT3, 32 бита (4 байта) на компонент цвета (RGB - 3 компонента)
-    unsigned frameSizeBytes = 4 * 3 * width * height;
+    // Получть кол-во устройство готовых выполнять денойзинг
+    int deviceCount = 0;
+    g_denoiserStatus = rifGetDeviceCount(RIF_BACKEND_API_OPENCL, &deviceCount);
+    if(g_denoiserStatus != RIF_SUCCESS || deviceCount == 0) throw std::runtime_error("Can't get device for denoiser.");
 
-    // Создать буферы
-    g_denoiserBufferColor = oidnNewBuffer(g_denoiserDevice,frameSizeBytes);
-    g_denoiserBufferAlbedo = oidnNewBuffer(g_denoiserDevice,frameSizeBytes);
-    g_denoiserBufferNormal = oidnNewBuffer(g_denoiserDevice,frameSizeBytes);
-    g_denoiserBufferResult = oidnNewBuffer(g_denoiserDevice,frameSizeBytes);
+    // Создать контекст денойзера
+    g_denoiserStatus = rifCreateContext(RIF_API_VERSION, RIF_BACKEND_API_OPENCL, 0, nullptr, &g_denoiserContext);
+    if(g_denoiserStatus != RIF_SUCCESS) throw std::runtime_error("Can't create denoiser context");
+
+    // Создать очередь
+    g_denoiserStatus = rifContextCreateCommandQueue(g_denoiserContext,&g_denoiserQueue);
+    if(g_denoiserStatus != RIF_SUCCESS) throw std::runtime_error("Can't create denoiser command queue");
+
+    // Создать входные изображения
+    rif_image_desc mainImageDesc = {};
+    mainImageDesc.type = RIF_COMPONENT_TYPE_FLOAT32;
+    mainImageDesc.num_components = 3;
+    mainImageDesc.image_width = width;
+    mainImageDesc.image_height = height;
+    mainImageDesc.image_depth = 1;
+
+    rif_image_desc depthImageDesc = mainImageDesc;
+    depthImageDesc.num_components = 1;
+
+    g_denoiserStatus = rifContextCreateImage(g_denoiserContext, &mainImageDesc, nullptr, &g_denoiserInputColorImage);
+    g_denoiserStatus = rifContextCreateImage(g_denoiserContext, &mainImageDesc, nullptr, &g_denoiserInputAlbedoImage);
+    g_denoiserStatus = rifContextCreateImage(g_denoiserContext, &mainImageDesc, nullptr, &g_denoiserInputNormalImage);
+    g_denoiserStatus = rifContextCreateImage(g_denoiserContext, &depthImageDesc,nullptr,&g_denoiserInputDepthImage);
+    g_denoiserStatus = rifContextCreateImage(g_denoiserContext, &mainImageDesc, nullptr, &g_denoiserOutputImage);
+    if(g_denoiserStatus != RIF_SUCCESS) throw std::runtime_error("Can't create denoiser image buffers");
 
     // Создать фильтр
-    g_denoiserFilter = oidnNewFilter(g_denoiserDevice,"RT");
-    oidnSetFilterImage(g_denoiserFilter,"color",g_denoiserBufferColor,OIDN_FORMAT_FLOAT3,width,height,0,0,0);
-    oidnSetFilterImage(g_denoiserFilter,"albedo",g_denoiserBufferAlbedo,OIDN_FORMAT_FLOAT3,width,height,0,0,0);
-    oidnSetFilterImage(g_denoiserFilter,"normal",g_denoiserBufferNormal,OIDN_FORMAT_FLOAT3,width,height,0,0,0);
-    oidnSetFilterImage(g_denoiserFilter,"output",g_denoiserBufferResult,OIDN_FORMAT_FLOAT3,width,height,0,0,0);
-    oidnSetFilter1b(g_denoiserFilter,"hdr",false);
-    oidnCommitFilter(g_denoiserFilter);
+    g_denoiserStatus = rifContextCreateImageFilter(g_denoiserContext,RIF_IMAGE_FILTER_AI_DENOISE,&g_denoiserFilterDenoise);
+    g_denoiserStatus = rifImageFilterSetParameterImage(g_denoiserFilterDenoise,"colorImg",g_denoiserInputColorImage);
+    g_denoiserStatus = rifImageFilterSetParameterImage(g_denoiserFilterDenoise,"normalsImg",g_denoiserInputNormalImage);
+    g_denoiserStatus = rifImageFilterSetParameterImage(g_denoiserFilterDenoise,"depthImg",g_denoiserInputDepthImage);
+    g_denoiserStatus = rifImageFilterSetParameterImage(g_denoiserFilterDenoise,"albedoImg",g_denoiserInputAlbedoImage);
+    g_denoiserStatus = rifImageFilterSetParameter1u(g_denoiserFilterDenoise,"useHDR",0);
+    if(g_denoiserStatus != RIF_SUCCESS) throw std::runtime_error("Can't create denoiser filter");
+
+    // Добавить фильтр в очередь
+    g_denoiserStatus = rifCommandQueueAttachImageFilter(g_denoiserQueue,g_denoiserFilterDenoise,g_denoiserInputColorImage,g_denoiserOutputImage);
+    if(g_denoiserStatus != RIF_SUCCESS) throw std::runtime_error("Can't attach denoiser filter to queue");
 
     // Создать текстуру итогового кадра для показа
     g_denoisedFrameTexture = new gl::Texture2D(nullptr,width,height,gl::Texture2D::ColorSpace::eRgb,gl::Texture2D::eBilinear,false,GL_FLOAT);
@@ -900,17 +927,20 @@ void ClearDenoiser()
     // Очистка текстуры итогового кадра
     delete g_denoisedFrameTexture;
 
-    // Очистка буферов
-    oidnReleaseBuffer(g_denoiserBufferColor);
-    oidnReleaseBuffer(g_denoiserBufferAlbedo);
-    oidnReleaseBuffer(g_denoiserBufferNormal);
-    oidnReleaseBuffer(g_denoiserBufferResult);
+    // Освободить очередь
+    rifCommandQueueDetachImageFilter(g_denoiserQueue,g_denoiserFilterDenoise);
 
-    // Очистка фильтра
-    oidnReleaseFilter(g_denoiserFilter);
+    // Удалить изображения
+    rifObjectDelete(g_denoiserInputColorImage);
+    rifObjectDelete(g_denoiserInputNormalImage);
+    rifObjectDelete(g_denoiserInputAlbedoImage);
+    rifObjectDelete(g_denoiserInputDepthImage);
+    rifObjectDelete(g_denoiserOutputImage);
 
-    // Очистка устройства
-    oidnReleaseDevice(g_denoiserDevice);
+    // Удалить фильтр, очередь, контекст
+    rifObjectDelete(g_denoiserFilterDenoise);
+    rifObjectDelete(g_denoiserQueue);
+    rifObjectDelete(g_denoiserContext);
 }
 
 /**
@@ -921,12 +951,13 @@ void DenoiseFrame(gl::FrameBuffer *frameBufferPtr)
 {
     // Вычислить размер буферов кадра
     // Исходим из того что формат кадра это FLOAT3, 32 бита (4 байта) на компонент цвета (RGB - 3 компонента)
-    unsigned frameSizeBytes = 4 * 3 * frameBufferPtr->getWidth() * frameBufferPtr->getHeight();
+    //unsigned frameSizeBytes = 4 * 3 * frameBufferPtr->getWidth() * frameBufferPtr->getHeight();
 
     // Разметить буферы изображений для входных данных
-    void* colorBufferPtr = oidnMapBuffer(g_denoiserBufferColor,OIDN_ACCESS_READ_WRITE,0,frameSizeBytes);
-    void* normalBufferPtr = oidnMapBuffer(g_denoiserBufferNormal,OIDN_ACCESS_READ_WRITE,0,frameSizeBytes);
-    void* albedoBufferPtr = oidnMapBuffer(g_denoiserBufferAlbedo,OIDN_ACCESS_READ_WRITE,0,frameSizeBytes);
+    void* colorBufferPtr = nullptr; rifImageMap(g_denoiserInputColorImage, RIF_IMAGE_MAP_WRITE, (void**)&colorBufferPtr);
+    void* normalBufferPtr = nullptr; rifImageMap(g_denoiserInputNormalImage, RIF_IMAGE_MAP_WRITE, (void**)&normalBufferPtr);
+    void* albedoBufferPtr = nullptr; rifImageMap(g_denoiserInputAlbedoImage, RIF_IMAGE_MAP_WRITE, (void**)&albedoBufferPtr);
+    void* depthBufferPtr = nullptr; rifImageMap(g_denoiserInputDepthImage, RIF_IMAGE_MAP_WRITE, (void**)&depthBufferPtr);
 
     // Работаем с кадровым буфером
     glBindFramebuffer(GL_FRAMEBUFFER, frameBufferPtr->getId());
@@ -937,19 +968,28 @@ void DenoiseFrame(gl::FrameBuffer *frameBufferPtr)
     glReadPixels(0,0,frameBufferPtr->getWidth(),frameBufferPtr->getHeight(),GL_RGB,GL_FLOAT,normalBufferPtr);
     glReadBuffer(GL_COLOR_ATTACHMENT2);
     glReadPixels(0,0,frameBufferPtr->getWidth(),frameBufferPtr->getHeight(),GL_RGB,GL_FLOAT,albedoBufferPtr);
+    glReadBuffer(GL_COLOR_ATTACHMENT3);
+    glReadPixels(0,0,frameBufferPtr->getWidth(),frameBufferPtr->getHeight(),GL_RED,GL_FLOAT,depthBufferPtr);
 
     // Убрать разметку со входных буферов
-    oidnUnmapBuffer(g_denoiserBufferColor, colorBufferPtr);
-    oidnUnmapBuffer(g_denoiserBufferNormal, normalBufferPtr);
-    oidnUnmapBuffer(g_denoiserBufferAlbedo, albedoBufferPtr);
+    rifImageUnmap(g_denoiserInputColorImage, colorBufferPtr);
+    rifImageUnmap(g_denoiserInputNormalImage, normalBufferPtr);
+    rifImageUnmap(g_denoiserInputAlbedoImage, albedoBufferPtr);
+    rifImageUnmap(g_denoiserInputDepthImage, depthBufferPtr);
 
     // Зайденойзить всё к хуям
-    oidnExecuteFilter(g_denoiserFilter);
+    rifContextExecuteCommandQueue(g_denoiserContext, g_denoiserQueue, nullptr, nullptr, nullptr);
 
     // Разметить буфер результата
-    void* resultBufferPtr = oidnMapBuffer(g_denoiserBufferResult,OIDN_ACCESS_READ_WRITE,0,frameSizeBytes);
+    void* resultBufferPtr = nullptr; rifImageMap(g_denoiserOutputImage, RIF_IMAGE_MAP_READ, (void**)&resultBufferPtr);
     // Скопировать данные в текстуру
     g_denoisedFrameTexture->setTextureData(resultBufferPtr,GL_RGB32F,GL_RGB,GL_FLOAT);
     // Убрать разметку
-    oidnUnmapBuffer(g_denoiserBufferResult, resultBufferPtr);
+    rifImageUnmap(g_denoiserOutputImage, resultBufferPtr);
+}
+
+void PostDenoise(void* data)
+{
+    (void) data;
+    RenderFinalQuad(g_frameBuffer->getWidth(),g_frameBuffer->getHeight(),true);
 }

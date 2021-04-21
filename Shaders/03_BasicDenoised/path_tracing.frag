@@ -6,9 +6,15 @@
 
 #version 420 core
 
+// Максимальная дальность (используется в том числе и для вычисления буфера глубины)
+#define MAX_T 1000.0f
+
+// Ремаппинг нормалей (из диапозона [-1:1] в [0:1])
+#define REMAP_NORMALS true
+
 // Математические константы
-#define M_PI 3.141592
-#define M_RAD 57.2958
+#define M_PI 3.141592f
+#define M_RAD 57.2958f
 
 // Максимальное кол-во примитивов на сцене
 #define MAX_PRIMITIVES 10
@@ -36,6 +42,7 @@
 layout (location = 0) out vec3 oColor;        // Итоговый цвет фрагмента
 layout (location = 1) out vec3 oNormal;       // Нормаль в первом столкновении луча
 layout (location = 2) out vec3 oAlbedo;       // Собственный цвет в первом столкновении луча
+layout (location = 3) out float oDepth;       // Глубина в первом столкновении
 
 /*Вспомогательные типы*/
 
@@ -578,7 +585,7 @@ bool intersectScene(Ray ray, float tMin, float tMax, inout RayHitInfo hitInfo)
  * \param primaryNormal Нораль первой поверхности столкновения
  * \return Итоговый цвет
  */
-vec3 traceEyePath(in Ray ray, inout float seed, out vec3 primaryAlbedo, out vec3 primaryNormal)
+vec3 traceEyePath(in Ray ray, inout float seed, out vec3 primaryAlbedo, out vec3 primaryNormal, out float primaryDepth)
 {
     // Итоговый цвет
     vec3 resultColor = vec3(0.0f);
@@ -593,7 +600,16 @@ vec3 traceEyePath(in Ray ray, inout float seed, out vec3 primaryAlbedo, out vec3
         RayHitInfo hitInfo;
 
         // Было ли пересечение
-        bool hit = intersectScene(ray, 0.01f, 1000.0f, hitInfo);
+        bool hit = intersectScene(ray, 0.01f, MAX_T, hitInfo);
+
+        // Если это первая итерация и пересечение засчитано
+        if(i == 0 && hit){
+            // Сохранить нормаль и цвет первичного столкновения
+            primaryAlbedo = hitInfo.albedo;
+            primaryNormal = hitInfo.normal;
+            //primaryDepth = (hitInfo.t / MAX_T);
+            primaryDepth = log(hitInfo.t + 1.0f) / log(MAX_T + 1.0f);
+        }
 
         // Если пересенчение состоялось с источником света
         if(hit && hitInfo.materialType == MATERIAL_LIGHT && hitInfo.isFrontFace){
@@ -603,13 +619,6 @@ vec3 traceEyePath(in Ray ray, inout float seed, out vec3 primaryAlbedo, out vec3
             resultColor = light;
             // Оборвать цикл
             break;
-        }
-
-        // Если это первая итерация и пересечение засчитано
-        if(i == 0 && hit){
-            // Сохранить нормаль и цвет первичного столкновения
-            primaryAlbedo = hitInfo.albedo;
-            primaryNormal = hitInfo.normal;
         }
 
         // Следущий код исполняется исходя из того что цикл не был оборван
@@ -690,6 +699,8 @@ void main()
     vec3 resultAlbedo = vec3(0.0f);
     // Итоговая нормаль первого столкновения
     vec3 resultNoraml = vec3(0.0f);
+    // Итоговая глубина первого столкновения
+    float resultDepth = 0.0f;
 
     // Для каждого семпла
     for(int i = 0; i < SAMPLES; i++)
@@ -705,17 +716,21 @@ void main()
 
         // Albedo и нормаль первого столкновения
         vec3 albedo, normal;
+        // Глубина первого столкновения
+        float depth;
 
         // Построить путь луча и получить итоговый цвет
-        resultColor += traceEyePath(camRay, seed, albedo, normal);
+        resultColor += traceEyePath(camRay, seed, albedo, normal, depth);
         resultAlbedo += albedo;
         resultNoraml += normal;
+        resultDepth += depth;
     }
 
     // Усреднить по кол-ву семплов на пиксель
     resultColor /= SAMPLES;
     resultAlbedo /= SAMPLES;
     resultNoraml /= SAMPLES;
+    resultDepth /= SAMPLES;
 
     // Гамма коррекция
     //resultColor = pow(clamp(resultColor,0.0,1.0),vec3(0.45));
@@ -723,6 +738,7 @@ void main()
 
     // Присваиваем красный цвет (временно)
     oColor = resultColor;
-    oNormal = resultNoraml;
-    oAlbedo = resultAlbedo;
+    oNormal = REMAP_NORMALS ? ((resultNoraml + vec3(1.0f)) / 2.0f) : resultNoraml;
+    oAlbedo = sqrt(clamp(resultAlbedo,0.0,1.0));
+    oDepth = resultDepth;
 }

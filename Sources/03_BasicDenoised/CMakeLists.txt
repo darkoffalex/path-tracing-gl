@@ -30,4 +30,4 @@ else()
 endif()
 
 # Линковка с OpenGL и вспомогательной header-only библиотекой
-target_link_libraries(${TARGET_NAME} PUBLIC "opengl32" "Common" "oidn-1.3.0-x64-vc14/OpenImageDenoise" "oidn-1.3.0-x64-vc14/tbb")
+target_link_libraries(${TARGET_NAME} PUBLIC "opengl32" "Common" "rif-x64/RadeonImageFilters" "rif-x64/RadeonML")

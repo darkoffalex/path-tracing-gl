@@ -1,0 +1,24 @@
+
+#define RIF_VERSION_MAJOR      1
+#define RIF_VERSION_MINOR      7
+#define RIF_VERSION_REVISION   0
+#define RIF_COMMIT_INFO        0xbbcfd912
+
+
+
+#ifndef RIF_COMMIT_INFO
+#define RIF_VERSION_BUILD               0
+#else
+#define RIF_VERSION_BUILD               RIF_COMMIT_INFO
+#endif
+
+
+#define RIF_MAKE_VERSION(major, minor, revision, build) \
+    (((uint64_t)(major) << 56) | ((uint64_t)(minor) << 48) | ((uint64_t)(revision) << 32) | build)
+
+#define RIF_API_VERSION RIF_MAKE_VERSION(RIF_VERSION_MAJOR, RIF_VERSION_MINOR, RIF_VERSION_REVISION, RIF_VERSION_BUILD)
+
+#define RIF_STRINGIFY2(s) #s
+#define RIF_STRINGIFY(s) RIF_STRINGIFY2(s)
+
+#define RIF_API_VERSION_STRING RIF_STRINGIFY(RIF_VERSION_MAJOR) "." RIF_STRINGIFY(RIF_VERSION_MINOR) "." RIF_STRINGIFY(RIF_VERSION_REVISION) "." RIF_STRINGIFY(RIF_VERSION_BUILD)
