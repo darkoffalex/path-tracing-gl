@@ -142,7 +142,7 @@ gl::GeometryBuffer* g_geometryQuad = nullptr;
 /// Шейдерная программа для трассировки путей
 gl::ShaderProgram<UniformLocationsPt>* g_shaderPathTracing = nullptr;
 /// Шейдерная программа для пост-процессинга
-gl::ShaderProgram<UniformLocationsPost>* g_shaderProgramPost = nullptr;
+gl::ShaderProgram<UniformLocationsPost>* g_shaderPostProcess = nullptr;
 /// Основной кадровый буфер
 gl::FrameBuffer* g_frameBuffer = nullptr;
 /// UBO буфер содежрайщий общие параметры
@@ -634,7 +634,7 @@ void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
         });
 
         // Собрать шейдерную программу для пост-процесса
-        g_shaderProgramPost = new gl::ShaderProgram<UniformLocationsPost>({
+        g_shaderPostProcess = new gl::ShaderProgram<UniformLocationsPost>({
             {GL_VERTEX_SHADER, vsSource.c_str()},
             {GL_FRAGMENT_SHADER, fsPostSource.c_str()}
         });
@@ -776,7 +776,7 @@ void RenderFinalQuad(GLuint width, GLuint height)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     // Использовать шейдер пост-обработки
-    glUseProgram(g_shaderProgramPost->getId());
+    glUseProgram(g_shaderPostProcess->getId());
 
     // Включить запись в цветовой буфер
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -795,7 +795,7 @@ void RenderFinalQuad(GLuint width, GLuint height)
     // Передать цветовое вложение основного фрейм-буфера в качестве текстуры
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D,g_frameBuffer->getTextureAttachments()[0]);
-    glUniform1i(g_shaderProgramPost->getUniformLocations()->screenTexture,0);
+    glUniform1i(g_shaderPostProcess->getUniformLocations()->screenTexture, 0);
 
     // Привязать геометрию и нарисовать ее
     glBindVertexArray(g_geometryQuad->getVaoId());

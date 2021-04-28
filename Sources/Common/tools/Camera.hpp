@@ -11,21 +11,42 @@ namespace tools
     {
     public:
         /**
-         * Оси координат
+         * \brief Оси координат
          * Используется при указании порядка во время поворотом на углы Эйлера
          */
         enum Axis { eAxisX, eAxisY, eAxisZ };
+
+        /**
+         * \brief Тип проекции
+         * Используется при построении матрицы проекции
+         */
+        enum ProjectionType {ePerspective, eOrthogonal};
 
     private:
         /// Матрица модели (локальные -> глобальные)
         glm::mat4 modelMatrix_ = glm::mat4(1);
         /// Матрица вида (глобальные -> локальные)
         glm::mat4 viewMatrix_ = glm::mat4(1);
+        /// Матрица проекции (локальные -> NDC)
+        glm::mat4 projectionMatrix_ = glm::mat4(1);
+        /// Обратная матрица проекции (NDC -> локальные)
+        glm::mat4 projectionInverseMatrix_ = glm::mat4(1);
 
         /// Абсолютное положение в пространстве
         glm::vec3 position_;
         /// Ориентация в пространстве
         glm::vec3 orientation_;
+
+        /// Тип проекции
+        ProjectionType projectionType_ = ProjectionType::ePerspective;
+        /// Ближняя грань отсечения
+        GLfloat zNear_;
+        /// Дальняя грань отсечения
+        GLfloat zFar_;
+        /// Угол обзора
+        GLfloat fov_;
+        /// Соотношение сторон
+        GLfloat aspect_;
 
         /// Вектор скорости в локальном пространстве
         glm::vec3 velocityRel_;
@@ -106,6 +127,27 @@ namespace tools
             this->viewMatrix_ = glm::inverse(model);
         }
 
+        /**
+         * \brief Обновление матрицы проекции
+         */
+        void updateProjectionMatrix()
+        {
+            switch(projectionType_)
+            {
+                case ePerspective:
+                    this->projectionMatrix_ = glm::perspectiveRH_ZO(glm::radians(fov_),aspect_,zNear_,zFar_);
+                    break;
+                case eOrthogonal:
+                    this->projectionMatrix_ = glm::orthoRH_ZO(-fov_ * aspect_ / 2.0f, fov_ * aspect_ / 2.0f, -fov_ / 2.0f, fov_ / 2.0f,zNear_,zFar_);
+                    break;
+                default:
+                    this->projectionMatrix_ = glm::mat4(1.0f);
+                    break;
+            }
+
+            this->projectionInverseMatrix_ = glm::inverse(projectionMatrix_);
+        }
+
     public:
         /**
          * \brief Конструктор по умолчанию
@@ -113,11 +155,18 @@ namespace tools
         Camera():
                 position_({0.0f,0.0f,0.0f}),
                 orientation_({0.0f,0.0f,0.0f}),
+                projectionType_(ePerspective),
+                zNear_(0.01f),
+                zFar_(1000.0f),
+                fov_(45.0f),
+                aspect_(1.0f),
                 velocityRel_({0.0f,0.0f,0.0f}),
                 velocity_({0.0f,0.0f,0.0f})
+
         {
             this->updateModelMatrix();
             this->updateViewMatrix();
+            this->updateProjectionMatrix();
         }
 
         /**
@@ -125,14 +174,20 @@ namespace tools
          * \param position Положение
          * \param orientation Ориентация
          */
-        explicit Camera(const glm::vec3& position, const glm::vec3& orientation = { 0.0f, 0.0f, 0.0f }):
+        explicit Camera(const glm::vec3& position, const glm::vec3& orientation = { 0.0f, 0.0f, 0.0f }, GLfloat fov = 45.0f):
                 position_(position),
                 orientation_(orientation),
+                projectionType_(ePerspective),
+                zNear_(0.01f),
+                zFar_(1000.0f),
+                fov_(fov),
+                aspect_(1.0f),
                 velocityRel_({0.0f,0.0f,0.0f}),
                 velocity_({0.0f,0.0f,0.0f})
         {
             this->updateModelMatrix();
             this->updateViewMatrix();
+            this->updateProjectionMatrix();
         }
 
         /**
@@ -156,6 +211,24 @@ namespace tools
         [[nodiscard]] const glm::mat4& getViewMatrix() const
         {
             return viewMatrix_;
+        }
+
+        /**
+         * \brief Получить ссылку на матрицу проекции
+         * \return Константная ссылка на матрицу 4*4
+         */
+        [[nodiscard]] const glm::mat4& getProjMatrix() const
+        {
+            return projectionMatrix_;
+        }
+
+        /**
+         * \brief Получить ссылку на инвертированную матрицу проекции
+         * \return Константная ссылка на матрицу 4*4
+         */
+        [[nodiscard]] const glm::mat4& getProjInverseMatrix() const
+        {
+            return projectionInverseMatrix_;
         }
 
         /**
@@ -222,6 +295,109 @@ namespace tools
         [[nodiscard]] const glm::vec3& getVelocityRel()
         {
             return velocityRel_;
+        }
+
+        /**
+         * \brief Установить ближнюю плоскость отсечения
+         * \param zNear Положение плоскости
+         * \param updateMatrix Обновить матрицу проекции
+         */
+        void setZNear(const GLfloat& zNear, bool updateMatrix = true)
+        {
+            this->zNear_ = zNear;
+            if(updateMatrix) this->updateProjectionMatrix();
+        }
+
+        /**
+         * \brief Получить ближнюю плоскость отсечения
+         * \return Значение ближнюю плоскости отсечения
+         */
+        [[nodiscard]] const GLfloat& getZNear() const
+        {
+            return zNear_;
+        }
+
+        /**
+         * \brief Установить дальнюю плоскость отсечения
+         * \param zFar Положение плоскости
+         * \param updateMatrix Обновить матрицу проекции
+         */
+        void setZFar(const GLfloat& zFar, bool updateMatrix = true)
+        {
+            this->zFar_ = zFar;
+            if(updateMatrix) this->updateProjectionMatrix();
+        }
+
+        /**
+         * \brief Получить дальнюю плоскость отсечения
+         * \return Значение дальней плоскости отсечения
+         */
+        [[nodiscard]] const GLfloat& getZFar() const
+        {
+            return zFar_;
+        }
+
+        /**
+         * \brief Установить тип проекции
+         * \param projectionType Тип проекции
+         * \param updateMatrix Обновить матрицу проекции
+         */
+        void setProjectionType(ProjectionType projectionType, bool updateMatrix = true)
+        {
+            this->projectionType_ = projectionType;
+            if(updateMatrix) this->updateProjectionMatrix();
+        }
+
+        /**
+         * \brief Получить тип проекции
+         * \return Тип проекции
+         */
+        [[nodiscard]] ProjectionType getProjectionType() const
+        {
+            return projectionType_;
+        }
+
+        /**
+         * \brief Установить соотношение сторон
+         * \param aspect Соотношение
+         * \param updateMatrix Обновить матрицу проекции
+         */
+        void setAspect(const GLfloat& aspect, bool updateMatrix = true)
+        {
+            this->aspect_ = aspect;
+            if(updateMatrix) this->updateProjectionMatrix();
+        }
+
+        /**
+         * \brief Получить соотношение сторон
+         * \return Значение соотношения сторон
+         */
+        [[nodiscard]] GLfloat getAspect() const
+        {
+            return aspect_;
+        }
+
+        /**
+         * \brief Устноавить область/угол обзора
+         * \param fov Значение области/угла обзора
+         * \param updateMatrix Обновить матрицу
+         *
+         * \details Если проекция ортогональная - область задается кватратом (с учетом соотношения) в метрах, если проекция перспективная
+         * область задается в градусах (угол обзора)
+         */
+        void setFov(const GLfloat& fov, bool updateMatrix = true)
+        {
+            this->fov_ = fov;
+            if(updateMatrix) this->updateProjectionMatrix();
+        }
+
+        /**
+         * \brief Получить область/угол обзора
+         * \return Значение области/угла обзора
+         */
+        [[nodiscard]] GLfloat getFov() const
+        {
+            return fov_;
         }
 
         /**

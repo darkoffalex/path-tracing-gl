@@ -30,4 +30,4 @@ add_subdirectory("Sources/Common")
 # Примеры реализаций
 add_subdirectory("Sources/01_Basic")
 add_subdirectory("Sources/02_Progressive")
-add_subdirectory("Sources/03_BasicDenoised")
+add_subdirectory("Sources/03_Temporal")

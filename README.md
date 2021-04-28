@@ -11,7 +11,11 @@
 
    ![изображение](README_files/progressive.png)
 
-В планах : _денойзинг, importance sampling, двунаправленная (bidirectional) трассировка путей_
+3) Простейщий денойзинг (Temporal Reprojection + Gaussian Blur)
+
+   ![изображение](README_files/temporal.png)
+
+В планах : _importance sampling, двунаправленная (bidirectional) трассировка путей_
 
 Код писался и тестировался при помощи следующего набора инструментов
  - CLion (IDE)
