@@ -188,7 +188,7 @@ void RenderFinalQuad(GLsizei width, GLsizei height);
  */
 void UpdatePrimitiveCount(GLuint totalPrimitives);
 
-void clearPrimaryFramebuffer();
+void ClearPrimaryFramebuffer();
 
 /** M A I N **/
 
@@ -507,12 +507,12 @@ void Controls(float camSpeed, float mouseSensitivity)
         g_camera->setOrientation(orientation);
 
         // Обнуление кадрового буфера в случае изменения координат мыши
-        if(deltaMousePos.x != 0 || deltaMousePos.y != 0) clearPrimaryFramebuffer();
+        if(deltaMousePos.x != 0 || deltaMousePos.y != 0) ClearPrimaryFramebuffer();
     }
     lastMousePos = currentMousePos;
 
     // Обнуление кадрового буфера в случае движения
-    if(glm::length2(camVelocityRel) > 0.0f || glm::length2(camVelocityAbs) > 0.0f) clearPrimaryFramebuffer();
+    if(glm::length2(camVelocityRel) > 0.0f || glm::length2(camVelocityAbs) > 0.0f) ClearPrimaryFramebuffer();
 
     // Установить векторы движения камеры
     if(g_camera != nullptr){
@@ -820,7 +820,7 @@ void UpdatePrimitiveCount(GLuint totalPrimitives)
  * \details В случае с изменением сцены (положением камеры или объектов) необходимо очистить кадровый буфер, поскольку
  * буфер накапливает информацию о цвете сцены в каждом кадре, и при изменении сцены она перестает быть актуальной
  */
-void clearPrimaryFramebuffer()
+void ClearPrimaryFramebuffer()
 {
     // Привязываемся к первичному фрейм-буфферу
     glBindFramebuffer(GL_FRAMEBUFFER, g_frameBuffer->getId());
