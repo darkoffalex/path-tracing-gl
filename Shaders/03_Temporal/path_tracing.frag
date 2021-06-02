@@ -17,10 +17,10 @@
 #define MAX_T 1000.0f
 
 // Кол-во семплов на 1 пиксель
-#define SAMPLES 11
+#define SAMPLES 16
 
 // Коэффициент интерполяци для темпоральной репроекции
-#define TEMPORAL_COEF_BASE 0.82f
+#define TEMPORAL_COEF_BASE 0.75f
 
 // Граничное значение разницы глубины точки, после которого точка считается другой при темпоральном наложении
 #define TEMPORAL_DEPTH_TOLERANCE 0.0005f

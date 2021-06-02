@@ -179,11 +179,11 @@ namespace gl
 
             // Помещаем данные в буфер вершин
             glBindBuffer(GL_ARRAY_BUFFER, vboId_);
-            glBufferData(GL_ARRAY_BUFFER, vertexCount_ * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
+            glBufferData(GL_ARRAY_BUFFER, vertexCount_ * static_cast<GLsizeiptr>(sizeof(Vertex)), vertices.data(), GL_STATIC_DRAW);
 
             // Помещаем данные в основной буфер индексов
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, eboId_);
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexCount_ * sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexCount_ * static_cast<GLsizeiptr>(sizeof(GLuint)), indices.data(), GL_STATIC_DRAW);
 
             // Пояснения шейдеру как понимать данные из активного VBO (буфера вершин) в контексте активного VAO
             setupVertexAttributes();
@@ -218,7 +218,7 @@ namespace gl
          * Получить кол-во индексов
          * \return Число индексов
          */
-        [[nodiscard]] GLuint getIndexCount() const
+        [[nodiscard]] GLsizei getIndexCount() const
         {
             return this->indexCount_;
         }

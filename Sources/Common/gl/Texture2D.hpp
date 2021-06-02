@@ -24,7 +24,7 @@ namespace gl
          * \param mip Включена ли генерация мип-уровней
          * \return OpenGL идентификатор фильтрации
          */
-        static GLuint getGlFilteringType(FiltrationType filtering, bool mip)
+        static GLint getGlFilteringType(FiltrationType filtering, bool mip)
         {
             switch (filtering)
             {
@@ -130,7 +130,7 @@ namespace gl
 
             // Определить подходящий формат
             GLuint format;
-            GLuint internalFormat;
+            GLint internalFormat;
             switch (colors_)
             {
                 case eRgb:
@@ -162,7 +162,7 @@ namespace gl
 
 
             // Устанавливаем данные текстуры (загрузка в текстурную память)
-            if(textureData) glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, this->width_, this->height_, 0, format, type, textureData);
+            if(textureData) glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, static_cast<GLsizei>(width_), static_cast<GLsizei>(height_), 0, format, type, textureData);
 
             // Генерация мип-уровней (если нужно)
             if (this->mip_) {
@@ -188,13 +188,13 @@ namespace gl
          * \param format Формат выборки
          * \param type Тип данных
          */
-        void setTextureData(void* textureData, GLuint internalFormat, GLuint format, GLuint type = GL_UNSIGNED_BYTE) const
+        void setTextureData(void* textureData, GLint internalFormat, GLuint format, GLuint type = GL_UNSIGNED_BYTE) const
         {
             // Привязываемся к текстуре по идентификатору (работаем с текстурой)
             glBindTexture(GL_TEXTURE_2D, this->id_);
 
             // Устанавливаем данные текстуры (загрузка в текстурную память)
-            glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, this->width_, this->height_, 0, format, type, textureData);
+            glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, static_cast<GLsizei>(width_), static_cast<GLsizei>(height_), 0, format, type, textureData);
 
             // Генерация мип-уровней (если нужно)
             if (this->mip_) {

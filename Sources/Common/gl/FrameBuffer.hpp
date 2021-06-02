@@ -149,7 +149,7 @@ namespace gl
          * \param mip Использовать мип-уровни
          */
         void addTextureAttachment(
-                GLuint internalFormat = GL_RGBA,
+                GLint internalFormat = GL_RGBA,
                 GLuint format = GL_RGBA,
                 GLuint attachmentBindingId = GL_COLOR_ATTACHMENT0,
                 bool mip = false)

@@ -103,16 +103,16 @@ std::string LoadStringFromFile(const std::string &path);
 struct UniformLocationsPt
 {
     // Идентификаторы локаций
-    GLuint camFov = 0;
-    GLuint camPosition = 0;
-    GLuint viewMatrix = 0;
-    GLuint camModelMatrix = 0;
-    GLuint screenSize = 0;
-    GLuint time = 0;
+    GLint camFov = 0;
+    GLint camPosition = 0;
+    GLint viewMatrix = 0;
+    GLint camModelMatrix = 0;
+    GLint screenSize = 0;
+    GLint time = 0;
 
     // Ассоциативный массив связи идентификаторов и uniform-переменных в шейдере
     // Используется при инициализации шейдерной программы и получении идентификаторов локаций
-    std::unordered_map<GLuint*, std::string> bindings = {
+    std::unordered_map<GLint*, std::string> bindings = {
             {&camFov,"iCamFov"},
             {&camPosition,"iCamPosition"},
             {&viewMatrix,"iView"},
@@ -128,11 +128,11 @@ struct UniformLocationsPt
 struct UniformLocationsPost
 {
     // Идентификаторы локаций
-    GLuint screenTexture = 0;
+    GLint screenTexture = 0;
 
     // Ассоциативный массив связи идентификаторов и uniform-переменных в шейдере
     // Используется при инициализации шейдерной программы и получении идентификаторов локаций
-    std::unordered_map<GLuint*, std::string> bindings = {
+    std::unordered_map<GLint*, std::string> bindings = {
             {&screenTexture,"iScreenTexture"}
     };
 };
@@ -161,7 +161,7 @@ void SetVSyncStatus(bool status);
  * \param screenWidth Ширина экрана
  * \param screenHeight Высота жкрана
  */
-void InitOpenGl(unsigned screenWidth, unsigned screenHeight);
+void InitOpenGl(GLsizei screenWidth, GLsizei screenHeight);
 
 /**
  * \brief Уничтожение компонентов рендеринга
@@ -180,7 +180,7 @@ void RenderPrimaryQuad();
  * \param width Ширина кадрового буфера по умолчанию
  * \param height Высота кадрового буфера по умолчанию
  */
-void RenderFinalQuad(GLuint width, GLuint height);
+void RenderFinalQuad(GLsizei width, GLsizei height);
 
 /**
  * \brief Обновить кол-во примитивов в UBO буфере
@@ -271,7 +271,7 @@ int main(int argc, char* argv[])
         wglMakeCurrent(g_hdc,g_hglrc);
 
         // Инициализация OpenGL
-        InitOpenGl(static_cast<unsigned>(clientRect.right),static_cast<unsigned>(clientRect.bottom));
+        InitOpenGl(clientRect.right,clientRect.bottom);
 
         // Вертикальная синхронизация
         SetVSyncStatus(false);
@@ -303,7 +303,7 @@ int main(int argc, char* argv[])
         g_primitives.push_back(new tools::PrimitiveRectangle({0.0f,4.95f,0.0f},{90.0f,0.0f,0.0f},{3.0f,3.0f},light));
 
         // Обновить массив примитивов в UBO буфере
-        for(unsigned int i = 0; i < g_primitives.size(); i++) g_primitives[i]->writeToUniformBuffer(g_uboPrimitives,i);
+        for(unsigned int i = 0; i < g_primitives.size(); i++) g_primitives[i]->writeToUniformBuffer(g_uboPrimitives, static_cast<GLsizei>(i));
         // Обновить кол-во примитивов в UBO буфере
         UpdatePrimitiveCount(g_primitives.size());
 
@@ -603,7 +603,7 @@ void SetVSyncStatus(bool status)
  * \param screenWidth Ширина экрана
  * \param screenHeight Высота жкрана
  */
-void InitOpenGl(unsigned int screenWidth, unsigned int screenHeight)
+void InitOpenGl(GLsizei screenWidth, GLsizei screenHeight)
 {
     (void) screenWidth;
     (void) screenHeight;
@@ -770,7 +770,7 @@ void RenderPrimaryQuad()
  * \param width Ширина кадрового буфера по умолчанию
  * \param height Высота кадрового буфера по умолчанию
  */
-void RenderFinalQuad(GLuint width, GLuint height)
+void RenderFinalQuad(GLsizei width, GLsizei height)
 {
     // Привязываемся к основному фрейм-буферу
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
